@@ -192,6 +192,43 @@ test('pair launch closes its private room when a WindBot request fails', async (
     assert.equal(cleanupUrl.searchParams.get('kick'), 'M#123456789');
 });
 
+test('reboot waits for SRVPro recovery when its response body is interrupted', async (context) => {
+    const service = new ArenaService({}, {});
+    const activeContext = {
+        abortController: new AbortController(),
+        id: 'reboot-run',
+        settings: {
+            srvpro: {
+                host: 'srvpro.lan',
+                password: 'management-secret',
+                statusPort: 7922,
+                username: 'arena',
+            },
+        },
+    };
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async () => ({
+        ok: true,
+        status: 200,
+        text: async () => {
+            throw new TypeError('terminated');
+        },
+    });
+    let roomCheckCount = 0;
+    service.getRoomCount = async () => {
+        roomCheckCount++;
+        if (roomCheckCount === 1) {
+            throw new TypeError('fetch failed');
+        }
+        return 0;
+    };
+
+    await service.rebootServer(activeContext, 1);
+
+    assert.equal(roomCheckCount, 3);
+});
+
 test('deck listing keeps current decks available without an old WindBot', () => {
     const settings = createDefaultArenaSettings();
     Object.assign(settings.windbots.current, {

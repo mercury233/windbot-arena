@@ -625,7 +625,7 @@ class ArenaService {
         return rooms.length;
     }
 
-    async rebootServer(context) {
+    async rebootServer(context, pollIntervalMs = 1000) {
         const srvpro = context.settings.srvpro;
         const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/message');
         url.searchParams.set('username', srvpro.username);
@@ -635,15 +635,18 @@ class ArenaService {
         let rebootAccepted = false;
         let response;
         let body;
+        let responseRead = false;
         try {
             response = await fetchWithTimeout(url, 10000, context.abortController.signal);
             body = await response.text();
+            responseRead = true;
         } catch (error) {
             if (context.abortController.signal.aborted) {
                 throw context.abortController.signal.reason;
             }
+            // SRVPro 会在写入 reboot 响应后立即退出，响应体可能在客户端读取完成前被截断。
         }
-        if (response) {
+        if (responseRead) {
             if (!response.ok || body.includes('密码错误') || body.includes('reboot fail')) {
                 throw new Error(`服务端拒绝重启: HTTP ${response.status} ${body}`);
             }
@@ -656,7 +659,7 @@ class ArenaService {
         const deadline = Date.now() + 120000;
         let consecutiveSuccesses = 0;
         let sawUnavailable = false;
-        await sleep(1000, context.abortController.signal);
+        await sleep(pollIntervalMs, context.abortController.signal);
         while (Date.now() < deadline) {
             try {
                 await this.getRoomCount(context);
@@ -671,7 +674,7 @@ class ArenaService {
                 sawUnavailable = true;
                 consecutiveSuccesses = 0;
             }
-            await sleep(1000, context.abortController.signal);
+            await sleep(pollIntervalMs, context.abortController.signal);
         }
         throw new Error('服务端在重启后 120 秒内没有恢复');
     }
