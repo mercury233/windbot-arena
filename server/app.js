@@ -66,6 +66,22 @@ function createApp(config, database, arenaService, shutdownSignal) {
         response.json(arenaService.inspectSystem());
     });
 
+    app.get('/api/srvpro/rooms', async (request, response, next) => {
+        try {
+            response.json(await arenaService.listRooms());
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    app.get('/api/windbots/:name/output', (request, response, next) => {
+        try {
+            response.json(arenaService.getWindBotOutput(request.params.name));
+        } catch (error) {
+            next(error);
+        }
+    });
+
     app.get('/api/settings', (request, response) => {
         response.json(arenaService.getSettings());
     });

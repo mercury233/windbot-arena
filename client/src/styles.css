@@ -197,6 +197,47 @@ input {
     border-right: 0;
 }
 
+.readout-heading {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.readout-heading > span {
+    margin-bottom: 0;
+}
+
+.readout-heading button {
+    display: grid;
+    width: 22px;
+    height: 22px;
+    padding: 3px;
+    border: 0;
+    border-radius: 5px;
+    place-items: center;
+    color: #607780;
+    background: transparent;
+    cursor: pointer;
+}
+
+.readout-heading button:hover,
+.readout-heading button:focus-visible {
+    color: #63e6d3;
+    background: rgba(99, 230, 211, 0.08);
+    outline: none;
+}
+
+.readout-heading svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-width: 1.8;
+}
+
 .system-readout span,
 .field > span,
 .field-heading > span,
@@ -271,6 +312,108 @@ input {
 .experiment-tabs .n-radio-button {
     flex: 1;
     text-align: center;
+}
+
+.configuration-alert {
+    margin: -4px 0 24px;
+}
+
+.inspector-card {
+    width: min(1100px, calc(100vw - 32px));
+    max-height: calc(100vh - 48px);
+}
+
+.inspector-card > .n-card__content {
+    min-height: 280px;
+    overflow: auto;
+}
+
+.inspector-card .n-spin-container {
+    min-height: 230px;
+}
+
+.room-table-wrap {
+    max-height: min(60vh, 560px);
+    overflow: auto;
+    border: 1px solid #1c3038;
+    border-radius: 8px;
+    scrollbar-gutter: stable;
+}
+
+.room-table {
+    width: 100%;
+    min-width: 860px;
+    border-collapse: collapse;
+}
+
+.room-table th,
+.room-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid #1c3038;
+    color: #afc0c5;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.room-table th {
+    position: sticky;
+    z-index: 1;
+    top: 0;
+    color: #607780;
+    background: #0c181e;
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+}
+
+.room-table tr:last-child td {
+    border-bottom: 0;
+}
+
+.room-name-button {
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 3px;
+    color: #63e6d3;
+    background: transparent;
+    cursor: copy;
+    font: inherit;
+    text-align: left;
+}
+
+.room-name-button:hover,
+.room-name-button:focus-visible {
+    background: rgba(99, 230, 211, 0.09);
+    outline: none;
+}
+
+.command-output {
+    min-height: 230px;
+    max-height: calc(100vh - 250px);
+    margin: 0;
+    padding: 16px;
+    overflow: auto;
+    border: 1px solid #1c3038;
+    border-radius: 8px;
+    color: #bfd0d4;
+    background: #071015;
+    font: 11px/1.65 'DM Mono', monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.inspector-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.inspector-footer > span {
+    color: #607780;
+    font-family: 'DM Mono', monospace;
+    font-size: 9px;
 }
 
 .panel-heading,
@@ -949,6 +1092,36 @@ html[data-theme='light'] body .settings-time,
 [data-theme='light'] .result-table .deck-win-rate,
 [data-theme='light'] .event-list span {
     color: #29464f;
+}
+
+[data-theme='light'] .readout-heading button {
+    color: #5c747b;
+}
+
+[data-theme='light'] .readout-heading button:hover,
+[data-theme='light'] .readout-heading button:focus-visible,
+[data-theme='light'] .room-name-button {
+    color: #137f73;
+}
+
+[data-theme='light'] .room-table-wrap,
+[data-theme='light'] .room-table th,
+[data-theme='light'] .room-table td,
+[data-theme='light'] .command-output {
+    border-color: #cfdddf;
+}
+
+[data-theme='light'] .room-table td,
+[data-theme='light'] .command-output {
+    color: #29464f;
+}
+
+[data-theme='light'] .command-output {
+    background: #f7fbfb;
+}
+
+[data-theme='light'] .room-table th {
+    background: #f7fbfb;
 }
 
 [data-theme='light'] .panel {

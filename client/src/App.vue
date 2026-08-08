@@ -4,9 +4,11 @@ import {
     NAlert,
     NAutoComplete,
     NButton,
+    NCard,
     NCheckbox,
     NEmpty,
     NInputNumber,
+    NModal,
     NPopconfirm,
     NProgress,
     NRadioButton,
@@ -55,11 +57,18 @@ const liveConnected = ref(false);
 const settingsOpen = ref(false);
 const settingsRecord = ref(null);
 const savingSettings = ref(false);
+const inspectorOpen = ref(false);
+const inspectorKind = ref('srvpro');
+const inspectorLoading = ref(false);
+const inspectorError = ref('');
+const inspectorRooms = ref([]);
+const inspectorOutput = ref(null);
 const clockNow = ref(Date.now());
 let eventSource;
 let clockTimer;
 let pollingTimer;
 let refreshTimer;
+let inspectorTimer;
 let refreshing;
 let refreshQueued = false;
 let recentDecksValidated = false;
@@ -73,7 +82,7 @@ const statusLabels = {
     preparing: '准备环境',
     queued: '排队中',
     running: '正在对局',
-    settling: '等待统计',
+    settling: '等待完成',
     stopped: '已停止',
     stopping: '停止中',
 };
@@ -179,6 +188,11 @@ const modeConfiguration = computed(() => (
     || { issues: system.value?.configuration.issues || [], valid: system.value?.configuration.valid === true }
 ));
 const configurationReady = computed(() => modeConfiguration.value.valid === true);
+const inspectorTitle = computed(() => ({
+    current: '新版 WindBot 命令行输出',
+    old: '旧版 WindBot 命令行输出',
+    srvpro: 'SRVPro 房间列表',
+}[inspectorKind.value]));
 const canStart = computed(() => {
     if (!configurationReady.value || activeRun.value) {
         return false;
@@ -200,7 +214,7 @@ const progress = computed(() => {
     const launchedGames = Math.min(run.launchedGames || 0, run.totalGames);
     const observedGames = Math.min(run.observedGames || 0, run.totalGames);
     return Math.min(100, Math.round(
-        ((launchedGames + observedGames) / (run.totalGames * 2)) * 100,
+        ((launchedGames + observedGames * 2) / (run.totalGames * 3)) * 100,
     ));
 });
 const totals = computed(() => {
@@ -366,6 +380,65 @@ async function openSettings() {
     }
 }
 
+async function loadInspector(silent = false) {
+    const kind = inspectorKind.value;
+    if (!silent) {
+        inspectorLoading.value = true;
+    }
+    try {
+        const body = kind === 'srvpro'
+            ? await api('/api/srvpro/rooms')
+            : await api(`/api/windbots/${kind}/output`);
+        if (kind !== inspectorKind.value || !inspectorOpen.value) {
+            return;
+        }
+        inspectorError.value = '';
+        if (kind === 'srvpro') {
+            inspectorRooms.value = body.rooms;
+        } else {
+            inspectorOutput.value = body;
+        }
+    } catch (error) {
+        if (kind === inspectorKind.value && inspectorOpen.value) {
+            inspectorError.value = error.message;
+        }
+    } finally {
+        if (kind === inspectorKind.value) {
+            inspectorLoading.value = false;
+        }
+    }
+}
+
+function openInspector(kind) {
+    clearInterval(inspectorTimer);
+    inspectorKind.value = kind;
+    inspectorRooms.value = [];
+    inspectorOutput.value = null;
+    inspectorError.value = '';
+    inspectorOpen.value = true;
+    loadInspector();
+    inspectorTimer = setInterval(() => loadInspector(true), 2000);
+}
+
+function closeInspector() {
+    inspectorOpen.value = false;
+    clearInterval(inspectorTimer);
+}
+
+function formatRoomPlayer(player) {
+    if (!player) {
+        return '—';
+    }
+    const details = [];
+    if (player.status?.score !== null && player.status?.score !== undefined) {
+        details.push(`Score: ${player.status.score}`);
+    }
+    if (player.status?.lp !== null && player.status?.lp !== undefined) {
+        details.push(`LP: ${player.status.lp}`);
+    }
+    return details.length > 0 ? `${player.name} (${details.join(' ')})` : player.name;
+}
+
 async function saveSettings(settings) {
     savingSettings.value = true;
     try {
@@ -499,6 +572,37 @@ function formatDuration(value) {
     return `${seconds}秒`;
 }
 
+async function writeClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return;
+        } catch {
+            // 在非安全来源下改用兼容复制方式。
+        }
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand('copy');
+    textarea.remove();
+    if (!copied) {
+        throw new Error('浏览器拒绝了复制请求');
+    }
+}
+
+async function copyRoomName(name) {
+    try {
+        await writeClipboard(name);
+        message.success('房名已复制');
+    } catch (error) {
+        message.error(`复制失败：${error.message}`);
+    }
+}
+
 async function copyResults() {
     const run = displayedRun.value;
     if (!run) {
@@ -566,28 +670,7 @@ async function copyResults() {
 
     const text = lines.join('\n');
     try {
-        let copied = false;
-        if (navigator.clipboard?.writeText) {
-            try {
-                await navigator.clipboard.writeText(text);
-                copied = true;
-            } catch {
-                copied = false;
-            }
-        }
-        if (!copied) {
-            const textarea = document.createElement('textarea');
-            textarea.value = text;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            copied = document.execCommand('copy');
-            textarea.remove();
-            if (!copied) {
-                throw new Error('浏览器拒绝了复制请求');
-            }
-        }
+        await writeClipboard(text);
         message.success('实验结果已复制为文本');
     } catch (error) {
         message.error(`复制失败：${error.message}`);
@@ -686,6 +769,7 @@ onBeforeUnmount(() => {
     clearInterval(clockTimer);
     clearInterval(pollingTimer);
     clearTimeout(refreshTimer);
+    clearInterval(inspectorTimer);
     eventSource?.close();
     document.removeEventListener('visibilitychange', refreshWhenVisible);
     window.removeEventListener('focus', scheduleRefresh);
@@ -724,15 +808,39 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="system-readout">
                     <div>
-                        <span>SRVPRO</span>
+                        <div class="readout-heading">
+                            <span>SRVPRO</span>
+                            <button type="button" title="查看房间列表" aria-label="查看 SRVPro 房间列表" @click="openInspector('srvpro')">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <circle cx="11" cy="11" r="6"></circle>
+                                    <path d="m16 16 4 4"></path>
+                                </svg>
+                            </button>
+                        </div>
                         <strong>{{ system ? `${system.srvpro.host}:${system.srvpro.duelPort}` : '—' }}</strong>
                     </div>
                     <div>
-                        <span>CURRENT WINDBOT</span>
+                        <div class="readout-heading">
+                            <span>CURRENT WINDBOT</span>
+                            <button type="button" title="查看命令行输出" aria-label="查看 Current WindBot 命令行输出" @click="openInspector('current')">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <circle cx="11" cy="11" r="6"></circle>
+                                    <path d="m16 16 4 4"></path>
+                                </svg>
+                            </button>
+                        </div>
                         <strong>{{ formatWindBotEndpoint(system?.windbots.current) }}</strong>
                     </div>
                     <div>
-                        <span>BASELINE WINDBOT</span>
+                        <div class="readout-heading">
+                            <span>BASELINE WINDBOT</span>
+                            <button type="button" title="查看命令行输出" aria-label="查看 Baseline WindBot 命令行输出" @click="openInspector('old')">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <circle cx="11" cy="11" r="6"></circle>
+                                    <path d="m16 16 4 4"></path>
+                                </svg>
+                            </button>
+                        </div>
                         <strong>{{ formatWindBotEndpoint(system?.windbots.old) }}</strong>
                     </div>
                 </div>
@@ -741,20 +849,6 @@ onBeforeUnmount(() => {
             <n-spin :show="loading">
                 <section class="workspace">
                     <div class="main-column">
-                        <n-alert
-                            v-if="system && !configurationReady"
-                            title="运行配置尚未就绪"
-                            type="error"
-                            :bordered="false"
-                        >
-                            <ul class="issue-list">
-                                <li v-for="issue in modeConfiguration.issues" :key="issue">{{ issue }}</li>
-                            </ul>
-                            <template #action>
-                                <n-button size="small" type="error" ghost @click="openSettings">打开配置</n-button>
-                            </template>
-                        </n-alert>
-
                         <article class="panel launch-panel">
                             <n-radio-group
                                 v-model:value="experimentKind"
@@ -766,6 +860,20 @@ onBeforeUnmount(() => {
                                 <n-radio-button value="challenge">卡组挑战</n-radio-button>
                                 <n-radio-button value="ranking">胜率排行</n-radio-button>
                             </n-radio-group>
+                            <n-alert
+                                v-if="system && !configurationReady"
+                                class="configuration-alert"
+                                title="运行配置尚未就绪"
+                                type="error"
+                                :bordered="false"
+                            >
+                                <ul class="issue-list">
+                                    <li v-for="issue in modeConfiguration.issues" :key="issue">{{ issue }}</li>
+                                </ul>
+                                <template #action>
+                                    <n-button size="small" type="error" ghost @click="openSettings">打开配置</n-button>
+                                </template>
+                            </n-alert>
                             <div class="panel-heading">
                                 <div>
                                     <span class="section-index">01</span>
@@ -1187,5 +1295,82 @@ onBeforeUnmount(() => {
             :saving="savingSettings"
             @save="saveSettings"
         />
+
+        <n-modal
+            :show="inspectorOpen"
+            :mask-closable="false"
+            @update:show="$event ? null : closeInspector()"
+        >
+            <n-card
+                class="inspector-card"
+                :title="inspectorTitle"
+                :bordered="false"
+                role="dialog"
+                aria-modal="true"
+            >
+                <template #header-extra>
+                    <n-button size="small" quaternary @click="closeInspector">关闭</n-button>
+                </template>
+                <n-alert v-if="inspectorError" type="error" :bordered="false">
+                    {{ inspectorError }}
+                </n-alert>
+                <n-spin :show="inspectorLoading">
+                    <template v-if="inspectorKind === 'srvpro'">
+                        <div v-if="inspectorRooms.length > 0" class="room-table-wrap">
+                            <table class="room-table">
+                                <thead>
+                                    <tr>
+                                        <th>序号</th>
+                                        <th>房名</th>
+                                        <th>玩家</th>
+                                        <th>玩家</th>
+                                        <th>状态</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="room in inspectorRooms" :key="room.id">
+                                        <td>{{ room.id }}</td>
+                                        <td>
+                                            <button
+                                                type="button"
+                                                class="room-name-button"
+                                                title="点击复制房名"
+                                                @click="copyRoomName(room.name)"
+                                            >
+                                                {{ room.name }}
+                                            </button>
+                                        </td>
+                                        <td>{{ formatRoomPlayer(room.players[0]) }}</td>
+                                        <td>{{ formatRoomPlayer(room.players[1]) }}</td>
+                                        <td>{{ room.status || '—' }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <n-empty v-else-if="!inspectorLoading && !inspectorError" description="当前没有房间" />
+                    </template>
+                    <template v-else>
+                        <n-alert
+                            v-if="inspectorOutput && !inspectorOutput.available"
+                            type="warning"
+                            :bordered="false"
+                        >
+                            远程 WindBot 的命令行不由 Arena 管理，无法读取输出。
+                        </n-alert>
+                        <pre v-else-if="inspectorOutput?.output" class="command-output">{{ inspectorOutput.output }}</pre>
+                        <n-empty
+                            v-else-if="!inspectorLoading && !inspectorError"
+                            description="本地 WindBot 尚无命令行输出"
+                        />
+                    </template>
+                </n-spin>
+                <template #footer>
+                    <div class="inspector-footer">
+                        <span>每 2 秒自动刷新</span>
+                        <n-button size="small" :loading="inspectorLoading" @click="loadInspector()">立即刷新</n-button>
+                    </div>
+                </template>
+            </n-card>
+        </n-modal>
     </div>
 </template>

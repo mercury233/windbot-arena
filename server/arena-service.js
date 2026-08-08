@@ -19,6 +19,7 @@ const { normalizeRank } = require('./stats');
 
 // “M”是 SRVPro 进入随机对战统计模式的协议值，不是房间密码或用户配置。
 const MATCH_MODE_PASSWORD = 'M';
+const MAX_WINDBOT_OUTPUT_LENGTH = 2000000;
 
 function requestError(message, statusCode = 400) {
     const error = new Error(message);
@@ -84,6 +85,10 @@ class ArenaService extends EventEmitter {
         this.runtimeConfig = runtimeConfig;
         this.database = database;
         this.current = null;
+        this.windbotOutputs = {
+            current: { active: false, output: '', updatedAt: null },
+            old: { active: false, output: '', updatedAt: null },
+        };
     }
 
     initialize() {
@@ -134,6 +139,66 @@ class ArenaService extends EventEmitter {
     getSettings() {
         const record = this.database.getArenaSettings();
         return getPublicArenaSettings(record.settings, record.updatedAt);
+    }
+
+    async listRooms() {
+        const { settings } = this.database.getArenaSettings();
+        let rooms;
+        try {
+            rooms = await this.fetchRooms(settings.srvpro);
+        } catch (error) {
+            throw requestError(`无法查询 SRVPro 房间: ${error.message}`, 502);
+        }
+        return {
+            fetchedAt: new Date().toISOString(),
+            rooms: rooms.map((room) => ({
+                id: String(room.roomid ?? ''),
+                name: String(room.roomname ?? ''),
+                players: Array.isArray(room.users)
+                    ? room.users
+                        .filter((user) => user && user.pos !== 7)
+                        .slice(0, 2)
+                        .map((user) => ({
+                            name: String(user.name ?? ''),
+                            status: user.status && typeof user.status === 'object'
+                                ? {
+                                    lp: user.status.lp ?? null,
+                                    score: user.status.score ?? null,
+                                }
+                                : null,
+                        }))
+                    : [],
+                status: String(room.istart ?? ''),
+            })),
+        };
+    }
+
+    getWindBotOutput(name) {
+        if (!['current', 'old'].includes(name)) {
+            throw requestError('未知的 WindBot 实例', 404);
+        }
+        const { settings } = this.database.getArenaSettings();
+        const instance = settings.windbots[name];
+        if (instance.mode === 'remote') {
+            return {
+                active: false,
+                available: false,
+                mode: 'remote',
+                output: '',
+                updatedAt: null,
+            };
+        }
+        return {
+            ...this.windbotOutputs[name],
+            available: true,
+            mode: 'local',
+        };
+    }
+
+    appendWindBotOutput(name, output) {
+        const entry = this.windbotOutputs[name];
+        entry.output = `${entry.output}${output}`.slice(-MAX_WINDBOT_OUTPUT_LENGTH);
+        entry.updatedAt = new Date().toISOString();
     }
 
     async updateSettings(input) {
@@ -345,14 +410,14 @@ class ArenaService extends EventEmitter {
             await this.rebootServer(context);
             this.database.addEvent(context.id, 'info', 'server-ready', 'SRVPro 已重启并恢复服务');
 
-            const instances = [['新版', context.settings.windbots.current]];
+            const instances = [['current', '新版', context.settings.windbots.current]];
             if (context.kind === 'regression') {
-                instances.push(['旧版', context.settings.windbots.old]);
+                instances.push(['old', '旧版', context.settings.windbots.old]);
             }
-            const readiness = instances.map(([label, instance]) => {
+            const readiness = instances.map(([name, label, instance]) => {
                 const endpointHost = instance.mode === 'local' ? '127.0.0.1' : instance.host;
                 const child = instance.mode === 'local'
-                    ? this.startWindBot(context, label, instance)
+                    ? this.startWindBot(context, name, label, instance)
                     : null;
                 if (instance.mode === 'remote') {
                     this.database.addEvent(
@@ -397,7 +462,7 @@ class ArenaService extends EventEmitter {
         }
     }
 
-    startWindBot(context, label, instance) {
+    startWindBot(context, name, label, instance) {
         const child = childProcess.spawn(path.join(instance.runtimeDir, 'WindBot.exe'), [
             'ServerMode=True',
             `ServerPort=${instance.port}`,
@@ -409,12 +474,28 @@ class ArenaService extends EventEmitter {
             windowsHide: true,
         });
         context.children.push(child);
-        child.stdout.on('data', (data) => process.stdout.write(`[${label}] ${data}`));
-        child.stderr.on('data', (data) => process.stderr.write(`[${label}:错误] ${data}`));
+        this.windbotOutputs[name] = {
+            active: true,
+            output: '',
+            updatedAt: new Date().toISOString(),
+        };
+        child.stdout.on('data', (data) => {
+            const output = data.toString('utf8');
+            this.appendWindBotOutput(name, output);
+            process.stdout.write(`[${label}] ${data}`);
+        });
+        child.stderr.on('data', (data) => {
+            const output = data.toString('utf8');
+            this.appendWindBotOutput(name, `[错误] ${output}`);
+            process.stderr.write(`[${label}:错误] ${data}`);
+        });
         child.on('error', (error) => {
             child.startError = error;
+            this.appendWindBotOutput(name, `\n[启动失败] ${error.message}\n`);
         });
         child.on('exit', (code, signal) => {
+            this.windbotOutputs[name].active = false;
+            this.appendWindBotOutput(name, `\n[进程已退出] code=${code}, signal=${signal || 'none'}\n`);
             console.log(`[${label}] WindBot 已退出: code=${code}, signal=${signal}`);
         });
         return child;
@@ -443,12 +524,11 @@ class ArenaService extends EventEmitter {
         throw new Error(`${label} WindBot HTTP 服务在 15 秒内没有就绪: ${host}:${port}`);
     }
 
-    async getRoomCount(context) {
-        const srvpro = context.settings.srvpro;
+    async fetchRooms(srvpro, signal) {
         const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/getrooms');
         url.searchParams.set('username', srvpro.username);
         url.searchParams.set('pass', srvpro.password);
-        const response = await fetchWithTimeout(url, 5000, context.abortController.signal);
+        const response = await fetchWithTimeout(url, 5000, signal);
         if (!response.ok) {
             throw new Error(`房间 API 返回 HTTP ${response.status}`);
         }
@@ -456,7 +536,18 @@ class ArenaService extends EventEmitter {
         if (!Array.isArray(body.rooms)) {
             throw new Error('房间 API 响应中没有 rooms 数组');
         }
-        return body.rooms.length;
+        if (body.rooms.some((room) => room?.roomid === '0' && room?.roomname === '密码错误')) {
+            throw new Error('SRVPro 管理账号或密码错误');
+        }
+        return body.rooms;
+    }
+
+    async getRoomCount(context) {
+        const rooms = await this.fetchRooms(
+            context.settings.srvpro,
+            context.abortController.signal,
+        );
+        return rooms.length;
     }
 
     async rebootServer(context) {

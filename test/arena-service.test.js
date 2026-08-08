@@ -142,3 +142,68 @@ test('saving a remote bot.conf URL fetches and persists its content', async (con
     const changed = await service.refreshBotConfigs();
     assert.equal(changed.contentChanged, true);
 });
+
+test('room inspection authenticates server-side and exposes only display fields', async (context) => {
+    const settings = createDefaultArenaSettings();
+    Object.assign(settings.srvpro, {
+        host: 'srvpro.lan',
+        password: 'management-secret',
+        statusPort: 7922,
+        username: 'arena',
+    });
+    const service = new ArenaService({}, {
+        getArenaSettings: () => ({ settings }),
+    });
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async (url) => {
+        assert.equal(url.hostname, 'srvpro.lan');
+        assert.equal(url.searchParams.get('username'), 'arena');
+        assert.equal(url.searchParams.get('pass'), 'management-secret');
+        return Response.json({
+            rooms: [{
+                istart: 'Duel:2 Turn:10',
+                roomid: '2937844',
+                roomname: 'M,RANDOM#85468',
+                users: [
+                    { ip: '192.0.2.1', name: '新版', pos: 0, status: { lp: 8000, score: 1 } },
+                    { ip: '192.0.2.2', name: '旧版', pos: 1, status: { lp: 8000, score: 0 } },
+                    { ip: '192.0.2.3', name: '观战者', pos: 7, status: null },
+                ],
+            }],
+        });
+    };
+
+    const result = await service.listRooms();
+    assert.deepEqual(result.rooms, [{
+        id: '2937844',
+        name: 'M,RANDOM#85468',
+        players: [
+            { name: '新版', status: { lp: 8000, score: 1 } },
+            { name: '旧版', status: { lp: 8000, score: 0 } },
+        ],
+        status: 'Duel:2 Turn:10',
+    }]);
+    assert.equal(JSON.stringify(result).includes('management-secret'), false);
+    assert.equal(JSON.stringify(result).includes('192.0.2.1'), false);
+});
+
+test('WindBot output inspection distinguishes local and remote instances', () => {
+    const settings = createDefaultArenaSettings();
+    const service = new ArenaService({}, {
+        getArenaSettings: () => ({ settings }),
+    });
+    service.appendWindBotOutput('current', 'Server started\n');
+
+    assert.equal(service.getWindBotOutput('current').output, 'Server started\n');
+    assert.equal(service.getWindBotOutput('current').available, true);
+    settings.windbots.old.mode = 'remote';
+    assert.deepEqual(service.getWindBotOutput('old'), {
+        active: false,
+        available: false,
+        mode: 'remote',
+        output: '',
+        updatedAt: null,
+    });
+    assert.throws(() => service.getWindBotOutput('unknown'), (error) => error.statusCode === 404);
+});

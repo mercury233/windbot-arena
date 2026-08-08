@@ -50,6 +50,8 @@ test('settings API saves configuration and the configured rank endpoint checks t
         getRankAccessKey: () => 'rank-secret',
         getRankPostPath: () => '/score/report',
         getSettings: () => publicRecord,
+        getWindBotOutput: (name) => ({ available: true, name, output: 'ready' }),
+        listRooms: () => ({ rooms: [{ id: '123', name: 'M,RANDOM#123' }] }),
         receiveRank: (rank) => { receivedRank = rank; },
         refreshBotConfigs: () => {
             refreshedDecks = true;
@@ -77,6 +79,14 @@ test('settings API saves configuration and the configured rank endpoint checks t
     const settingsResponse = await fetch(`${baseUrl}/api/settings`);
     assert.equal(settingsResponse.headers.get('cache-control'), 'no-store');
     assert.deepEqual(await settingsResponse.json(), publicRecord);
+    assert.deepEqual(await (await fetch(`${baseUrl}/api/srvpro/rooms`)).json(), {
+        rooms: [{ id: '123', name: 'M,RANDOM#123' }],
+    });
+    assert.deepEqual(await (await fetch(`${baseUrl}/api/windbots/current/output`)).json(), {
+        available: true,
+        name: 'current',
+        output: 'ready',
+    });
     const siteResponse = await fetch(`${baseUrl}/`);
     assert.equal(siteResponse.headers.get('cache-control'), 'no-cache');
     await fetch(`${baseUrl}/api/settings`, {
