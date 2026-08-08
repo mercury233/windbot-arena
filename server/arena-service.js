@@ -405,9 +405,6 @@ class ArenaService {
     async execute(context) {
         const { signal } = context.abortController;
         try {
-            this.database.setRunStatus(context.id, 'preparing', {
-                startedAt: new Date().toISOString(),
-            });
             this.database.addEvent(context.id, 'info', 'preparing', '正在重启 SRVPro 并清理旧对局');
             this.markChanged('preparing');
             await this.rebootServer(context);

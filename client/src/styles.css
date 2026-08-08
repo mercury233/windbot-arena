@@ -189,10 +189,6 @@ input {
     border-right: 1px solid #1b2c33;
 }
 
-.system-readout > div:first-child {
-    padding-left: 0;
-}
-
 .system-readout > div:last-child {
     border-right: 0;
 }
@@ -672,7 +668,7 @@ input {
     display: block;
     color: #dfeaed;
     font-family: 'DM Mono', monospace;
-    font-size: 25px;
+    font-size: 24px;
     font-weight: 500;
 }
 
@@ -681,24 +677,40 @@ input {
     font-size: 12px;
 }
 
-.metric .time-value {
-    font-size: 18px;
+.metric .leader-value,
+.metric .challenge-rate-value {
+    display: flex;
+    min-width: 0;
+    gap: 8px;
+    align-items: baseline;
+    font-family: 'Noto Sans SC', sans-serif;
+    font-size: 24px;
 }
 
-.metric .leader-value {
+.metric .leader-value > span,
+.metric .challenge-rate-value > span {
+    min-width: 0;
     overflow: hidden;
-    font-family: 'Noto Sans SC', sans-serif;
-    font-size: 18px;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.metric .leader-value > small,
+.metric .challenge-rate-value > small {
+    flex: none;
 }
 
 .primary-metric strong {
     color: #63e6d3;
 }
 
+.primary-metric .progress-value {
+    font-size: 18px;
+    line-height: 1;
+}
+
 .primary-metric .n-progress {
-    margin-top: 10px;
+    margin-top: 6px;
 }
 
 .table-wrap {
@@ -951,6 +963,7 @@ input {
     height: 120px;
     border: 1px solid rgba(99, 230, 211, 0.14);
     border-radius: 50%;
+    background: rgba(99, 230, 211, 0.025);
     content: '';
 }
 
@@ -1174,6 +1187,7 @@ html[data-theme='light'] body .instance-heading span {
 
 [data-theme='light'] .future-panel::after {
     border-color: rgba(19, 127, 115, 0.18);
+    background: rgba(19, 127, 115, 0.02);
 }
 
 [data-theme='light'] .event-list .event-error,

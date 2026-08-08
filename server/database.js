@@ -5,7 +5,7 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const { createDefaultArenaSettings } = require('./arena-settings');
 
-const activeStatuses = ['queued', 'preparing', 'running', 'settling', 'stopping'];
+const activeStatuses = ['preparing', 'running', 'settling', 'stopping'];
 
 function now() {
     return new Date().toISOString();
@@ -137,13 +137,15 @@ class ArenaDatabase {
         this.transaction(() => {
             this.db.prepare(`
                 INSERT INTO runs (
-                    id, kind, status, games_per_matchup, total_games, created_at, config_json
-                ) VALUES (?, ?, 'queued', ?, ?, ?, ?)
+                    id, kind, status, games_per_matchup, total_games,
+                    created_at, started_at, config_json
+                ) VALUES (?, ?, 'preparing', ?, ?, ?, ?, ?)
             `).run(
                 run.id,
                 run.kind,
                 run.gamesPerMatchup,
                 run.matchups.length * run.gamesPerMatchup,
+                run.createdAt,
                 run.createdAt,
                 JSON.stringify(run.config),
             );

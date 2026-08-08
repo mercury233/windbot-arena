@@ -68,6 +68,8 @@ test('ArenaDatabase persists a run and applies rank statistics', (context) => {
     assert.equal(run.matchups[0].aiLevel, 4);
     assert.equal(run.matchups[0].competitors[1].endpointHost, 'windbot-old.lan');
     assert.equal(run.matchups[0].currentWinRate, 0.7);
+    assert.equal(run.status, 'preparing');
+    assert.equal(run.startedAt, '2026-08-08T00:00:00.000Z');
     assert.equal(run.events.at(-1).message, '已创建 1 个卡组');
     assert.equal(database.listRuns()[0].matchupCount, 1);
     database.createRun({

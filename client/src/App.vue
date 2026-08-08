@@ -80,7 +80,6 @@ const statusLabels = {
     failed: '失败',
     interrupted: '已中断',
     preparing: '准备环境',
-    queued: '排队中',
     running: '正在对局',
     settling: '等待完成',
     stopped: '已停止',
@@ -91,7 +90,6 @@ const statusTypes = {
     failed: 'error',
     interrupted: 'warning',
     preparing: 'info',
-    queued: 'default',
     running: 'success',
     settling: 'warning',
     stopped: 'default',
@@ -241,8 +239,7 @@ const challengeRows = computed(() => {
         return [];
     }
     return [...displayedRun.value.matchups].sort((left, right) => (
-        Number(right.observedGames > 0) - Number(left.observedGames > 0)
-        || right.currentWinRate - left.currentWinRate
+        right.currentWinRate - left.currentWinRate
         || (right.competitors[0]?.win || 0) - (left.competitors[0]?.win || 0)
         || left.label.localeCompare(right.label)
     ));
@@ -1052,7 +1049,9 @@ onBeforeUnmount(() => {
                             <div class="metric-grid">
                                 <div class="metric primary-metric">
                                     <span>{{ displayedRun.kind === 'regression' ? '任务进度' : '已统计对局' }}</span>
-                                    <strong v-if="displayedRun.kind === 'regression'">{{ progress }}<small>%</small></strong>
+                                    <strong v-if="displayedRun.kind === 'regression'" class="progress-value">
+                                        {{ progress }}<small>%</small>
+                                    </strong>
                                     <strong v-else>{{ displayedRun.observedGames }}</strong>
                                     <n-progress
                                         v-if="displayedRun.kind === 'regression'"
@@ -1074,8 +1073,16 @@ onBeforeUnmount(() => {
                                     <span v-if="displayedRun.kind === 'ranking'">当前榜首</span>
                                     <span v-else>{{ displayedRun.kind === 'challenge' ? '挑战卡组总胜率' : '新版总胜率' }}</span>
                                     <strong v-if="displayedRun.kind === 'ranking'" class="leader-value">
-                                        {{ rankingLeader?.label || '统计中' }}
-                                        <small v-if="rankingLeader"> {{ formatPercent(rankingLeader.currentWinRate) }}</small>
+                                        <span :title="rankingLeader?.label || ''">
+                                            {{ rankingLeader?.label || '统计中' }}
+                                        </span>
+                                        <small v-if="rankingLeader">{{ formatPercent(rankingLeader.currentWinRate) }}</small>
+                                    </strong>
+                                    <strong v-else-if="displayedRun.kind === 'challenge'" class="challenge-rate-value">
+                                        <span :title="displayedRun.config?.targetDeck || ''">
+                                            {{ displayedRun.config?.targetDeck || '—' }}
+                                        </span>
+                                        <small>{{ formatPercent(currentWinRate) }}</small>
                                     </strong>
                                     <strong v-else>{{ formatPercent(currentWinRate) }}</strong>
                                 </div>
