@@ -87,7 +87,7 @@ Arena 为每组 Bot 生成一个 `M#123456789` 形式的唯一房名，并向双
 
 约战房名由 Arena 自动生成，不属于用户配置。当前胜负结果以 SRVPro 的累计约战排行为准。
 
-SRVPro 需要启用 `modules.private_duel.record_match_scores`，管理账号需要 `get_private_scores` 和 `kick_user` 权限；`post_match_scores` 可以保持关闭。
+SRVPro 需要启用 `modules.private_duel.record_match_scores`，管理账号需要 `get_private_scores`、`kick_user` 和 `stop` 权限，分别用于查询约战排行、清理房间和在每次测试前重启服务；`post_match_scores` 可以保持关闭。
 
 界面中的“新版胜率”按 `新版胜场 /（新版胜场 + 旧版胜场）` 计算。正常完成的对局中它与新版自身的胜负统计一致；逃跑作为异常计数单独展示，不再提供含义高度重叠的第二个胜率指标。“已统计对局”只按 `win + lose` 计算，`flee` 不会额外增加完成局数。
 

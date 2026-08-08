@@ -18,12 +18,13 @@ WindBot 有两种运行方式：
 - 本地模式：Arena 负责启动和关闭 `WindBot.exe`，并直接读取本地 `bot.conf`。
 - 远程模式：用户手动运行 WindBot Server，Arena 只调用远程 HTTP 端点；由于无法读取远端文件系统，`bot.conf` 内容由用户在网页粘贴并保存在 SQLite。
 
-Arena 为每组 Bot 生成 `M#123456789` 形式的唯一约战房名并传给双方。SRVPro 会保证相同房名的双方进入同一房间，并把普通约战结果记录到独立的 `private_duel` 累计排行。约战房名不是用户配置。任务运行中 Arena 每 15 秒使用管理凭据通过 SRVPro 的 `GET /api/getscores?type=private` 主动查询累计排行，管理账号需要 `get_private_scores` 权限。
+Arena 为每组 Bot 生成 `M#123456789` 形式的唯一约战房名并传给双方。SRVPro 会保证相同房名的双方进入同一房间，并把普通约战结果记录到独立的 `private_duel` 累计排行。约战房名不是用户配置。任务运行中 Arena 每 15 秒使用管理凭据通过 SRVPro 的 `GET /api/getscores?type=private` 主动查询累计排行。管理账号查询排行需要 `get_private_scores` 权限，清理房间和重启服务还分别需要 `kick_user` 和 `stop` 权限。
 
 ## 对局配对与统计限制
 
 - 每组 Bot 使用相同的唯一约战房名，因此可以保证组内双方进入同一房间；不同组不得复用房名。
 - WindBot Server 的 HTTP 请求只能确认某一方已接受启动请求，无法直接撤销已经加入的 Bot；若任一方启动失败或超时，Arena 应使用 SRVPro 的关房 API 清理该组唯一房间。只有关房也失败时，先加入的一方才会暂时留在不会与后续对局错配的孤立房间。
+- SRVPro 房间列表不包含尚未 established 的房间，因此快速调度时可能短暂超过 `maxRooms`；少量瞬时超额可以接受，不要仅为消除这一偏差引入在途房间预留。无需处理全部 100 个房间同时永久卡死、导致调度不再前进的极端情况。
 - 当前没有独立的逐局结果来源，胜负只能使用 SRVPro 的累计约战排行。
 
 ## 手动读取 SQLite 胜率
