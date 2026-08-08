@@ -138,14 +138,13 @@ class ArenaDatabase {
             this.db.prepare(`
                 INSERT INTO runs (
                     id, kind, status, games_per_matchup, total_games,
-                    created_at, started_at, config_json
-                ) VALUES (?, ?, 'preparing', ?, ?, ?, ?, ?)
+                    created_at, config_json
+                ) VALUES (?, ?, 'preparing', ?, ?, ?, ?)
             `).run(
                 run.id,
                 run.kind,
                 run.gamesPerMatchup,
                 run.matchups.length * run.gamesPerMatchup,
-                run.createdAt,
                 run.createdAt,
                 JSON.stringify(run.config),
             );
@@ -358,7 +357,7 @@ class ArenaDatabase {
 
     listRuns(limit = 30, offset = 0) {
         const rows = this.db.prepare(`
-            SELECT runs.*, COUNT(matchups.id) AS matchup_count
+            SELECT runs.*, COUNT(matchups.id) AS matchup_count, MIN(matchups.label) AS deck_name
             FROM runs
             LEFT JOIN matchups ON matchups.run_id = runs.id
             GROUP BY runs.id
@@ -367,6 +366,7 @@ class ArenaDatabase {
         `).all(limit, offset);
         return rows.map((row) => ({
             ...mapRunRow(row),
+            deckName: row.deck_name,
             matchupCount: row.matchup_count,
         }));
     }

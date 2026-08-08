@@ -182,7 +182,10 @@ test('pair launch closes its private room when a WindBot request fails', async (
         return new Response(null, { status: 200 });
     };
 
-    await assert.rejects(service.launchMatchup(activeContext, matchup), /WindBot 请求超时/);
+    await assert.rejects(
+        service.launchMatchup(activeContext, matchup),
+        /old 调用 WindBot 超时（5 秒）/,
+    );
     const cleanupUrl = requests.at(-1);
     assert.equal(cleanupUrl.hostname, 'srvpro.lan');
     assert.equal(cleanupUrl.port, '7922');

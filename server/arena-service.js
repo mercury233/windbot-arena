@@ -434,7 +434,9 @@ class ArenaService {
             });
             await Promise.all(readiness);
 
-            this.database.setRunStatus(context.id, 'running');
+            this.database.setRunStatus(context.id, 'running', {
+                startedAt: new Date().toISOString(),
+            });
             this.database.addEvent(
                 context.id,
                 'info',
@@ -700,9 +702,20 @@ class ArenaService {
         if (competitor.dialog) {
             url.searchParams.set('dialog', competitor.dialog);
         }
-        const response = await fetchWithTimeout(url, 5000, context.abortController.signal);
+        let response;
+        try {
+            response = await fetchWithTimeout(url, 5000, context.abortController.signal);
+        } catch (error) {
+            if (context.abortController.signal.aborted) {
+                throw context.abortController.signal.reason;
+            }
+            if (error?.name === 'TimeoutError') {
+                throw new Error(`${competitor.rankName} 调用 WindBot 超时（5 秒）`, { cause: error });
+            }
+            throw new Error(`${competitor.rankName} 调用 WindBot 失败: ${error.message}`, { cause: error });
+        }
         if (!response.ok) {
-            throw new Error(`${competitor.rankName} 启动请求返回 HTTP ${response.status}`);
+            throw new Error(`${competitor.rankName} 调用 WindBot 返回 HTTP ${response.status}`);
         }
     }
 

@@ -234,13 +234,25 @@ const currentWinRate = computed(() => {
     const decided = totals.value[0].win + totals.value[1].win;
     return decided === 0 ? 0 : totals.value[0].win / decided;
 });
+const regressionRows = computed(() => {
+    if (displayedRun.value?.kind !== 'regression') {
+        return [];
+    }
+    return [...displayedRun.value.matchups].sort((left, right) => (
+        (left.observedGames === 0) - (right.observedGames === 0)
+        || left.currentWinRate - right.currentWinRate
+        || (left.competitors[0]?.win || 0) - (right.competitors[0]?.win || 0)
+        || left.label.localeCompare(right.label)
+    ));
+});
 const challengeRows = computed(() => {
     if (displayedRun.value?.kind !== 'challenge') {
         return [];
     }
     return [...displayedRun.value.matchups].sort((left, right) => (
-        right.currentWinRate - left.currentWinRate
-        || (right.competitors[0]?.win || 0) - (left.competitors[0]?.win || 0)
+        (left.observedGames === 0) - (right.observedGames === 0)
+        || left.currentWinRate - right.currentWinRate
+        || (left.competitors[0]?.win || 0) - (right.competitors[0]?.win || 0)
         || left.label.localeCompare(right.label)
     ));
 });
@@ -256,14 +268,7 @@ const rankingRows = computed(() => {
 });
 const rankingLeader = computed(() => rankingRows.value.find((item) => item.observedGames > 0) || null);
 const elapsedMilliseconds = computed(() => {
-    const run = displayedRun.value;
-    const startedAt = Date.parse(run?.startedAt || run?.createdAt);
-    if (!Number.isFinite(startedAt)) {
-        return null;
-    }
-    const finishedAt = terminalStatuses.has(run.status) ? Date.parse(run.finishedAt) : clockNow.value;
-    const end = Number.isFinite(finishedAt) ? finishedAt : clockNow.value;
-    return Math.max(0, end - startedAt);
+    return getRunElapsedMilliseconds(displayedRun.value);
 });
 const estimatedCompletionAt = computed(() => {
     const run = displayedRun.value;
@@ -273,12 +278,24 @@ const estimatedCompletionAt = computed(() => {
     if (terminalStatuses.has(run.status)) {
         return run.finishedAt || null;
     }
-    const startedAt = Date.parse(run.startedAt || run.createdAt);
+    const startedAt = Date.parse(run.startedAt);
+    const sampledAt = Date.parse(run.latestRankAt);
     const observedGames = Math.min(run.observedGames || 0, run.totalGames || 0);
-    if (!Number.isFinite(startedAt) || observedGames === 0 || run.totalGames === 0) {
+    const elapsed = sampledAt - startedAt;
+    const minimumSample = Math.min(
+        run.totalGames || 0,
+        Math.max(20, Math.ceil((run.totalGames || 0) * 0.05)),
+    );
+    if (
+        !Number.isFinite(startedAt)
+        || !Number.isFinite(sampledAt)
+        || run.totalGames === 0
+        || observedGames < minimumSample
+        || elapsed < 30000
+    ) {
         return null;
     }
-    const estimatedDuration = Math.max(0, clockNow.value - startedAt) * (run.totalGames / observedGames);
+    const estimatedDuration = elapsed * (run.totalGames / observedGames);
     return new Date(startedAt + estimatedDuration).toISOString();
 });
 
@@ -603,6 +620,27 @@ function formatDuration(value) {
     return `${seconds}秒`;
 }
 
+function getRunElapsedMilliseconds(run) {
+    const createdAt = Date.parse(run?.createdAt);
+    if (!Number.isFinite(createdAt)) {
+        return null;
+    }
+    const finishedAt = terminalStatuses.has(run.status) ? Date.parse(run.finishedAt) : clockNow.value;
+    const end = Number.isFinite(finishedAt) ? finishedAt : clockNow.value;
+    return Math.max(0, end - createdAt);
+}
+
+function formatHistoryTitle(run) {
+    const label = runKindLabels[run.kind] || run.kind;
+    if (run.kind === 'challenge') {
+        return `${label} · ${run.config?.targetDeck || '—'} VS ${run.matchupCount} 个卡组`;
+    }
+    if (run.kind === 'regression' && run.matchupCount === 1 && run.deckName) {
+        return `${label} · ${run.deckName} · 1 个卡组`;
+    }
+    return `${label} · ${run.matchupCount} 个卡组`;
+}
+
 async function writeClipboard(text) {
     if (navigator.clipboard?.writeText) {
         try {
@@ -662,7 +700,7 @@ async function copyResults() {
 
     if (run.kind === 'regression') {
         lines.push('卡组\t等级 / Bot\t统计进度\t胜 / 负 / 逃\t新版胜率');
-        for (const matchup of run.matchups) {
+        for (const matchup of regressionRows.value) {
             const competitor = matchup.competitors[0];
             lines.push([
                 matchup.label,
@@ -673,14 +711,14 @@ async function copyResults() {
             ].join('\t'));
         }
     } else if (run.kind === 'challenge') {
-        lines.push('对手卡组\t等级 / Bot\t已统计 / 已创建\t挑战卡组 胜 / 负\t挑战卡组胜率');
+        lines.push('对手卡组\t等级 / Bot\t已统计 / 已创建\t挑战卡组 胜 / 负 / 逃\t挑战卡组胜率');
         for (const matchup of challengeRows.value) {
             const competitor = matchup.competitors[0];
             lines.push([
                 matchup.label,
                 `${matchup.aiLevel ? `LV${matchup.aiLevel} / ` : ''}${matchup.competitors[1]?.botLabel || '—'}`,
                 `${matchup.observedGames} / ${matchup.launchedGames}`,
-                `${competitor?.win || 0} / ${competitor?.lose || 0}`,
+                `${competitor?.win || 0} / ${competitor?.lose || 0} / ${competitor?.flee || 0}`,
                 formatPercent(matchup.currentWinRate),
             ].join('\t'));
         }
@@ -714,6 +752,15 @@ function handleDeckSelection(deck, checked) {
         : selectedDecks.value.filter((item) => item !== deck);
 }
 
+function clearRecentDecks() {
+    recentDecks.value = [];
+    try {
+        localStorage.removeItem('windbot-arena-recent-decks');
+    } catch {
+        // 当前页面仍会立即清除最近使用标记。
+    }
+}
+
 function isAiLevelSelected(aiLevel) {
     const decks = deckOptions.value.filter((option) => option.aiLevel === aiLevel);
     return decks.length > 0 && decks.every((option) => effectiveSelectedDeckSet.value.has(option.value));
@@ -745,12 +792,6 @@ function handleAiLevelSelection(aiLevel, checked) {
         .map((option) => option.value);
 }
 
-watch(activeRun, (run, previous) => {
-    if (run && !previous) {
-        deckListExpanded.value = false;
-    }
-});
-
 watch(catalogDeckOptions, (options) => {
     if (!system.value?.configuration?.valid || recentDecksValidated) {
         return;
@@ -763,7 +804,6 @@ watch(catalogDeckOptions, (options) => {
 
 watch(experimentKind, () => {
     allDecks.value = false;
-    deckListExpanded.value = true;
     const available = new Set(catalogDeckOptions.value.map((option) => option.value));
     selectedDecks.value = selectedDecks.value.filter((deck) => available.has(deck));
 });
@@ -917,16 +957,27 @@ onBeforeUnmount(() => {
                                 <div class="field field-wide deck-picker">
                                     <div class="field-heading">
                                         <span>{{ experimentKind === 'challenge' ? '对手卡组' : '测试卡组' }}</span>
-                                        <n-button
-                                            text
-                                            type="primary"
-                                            size="tiny"
-                                            :disabled="!!activeRun"
-                                            :loading="refreshingDecks"
-                                            @click="refreshBotConfigs"
-                                        >
-                                            刷新 bot.conf
-                                        </n-button>
+                                        <div class="field-heading-actions">
+                                            <n-button
+                                                text
+                                                type="primary"
+                                                size="tiny"
+                                                :disabled="recentDecks.length === 0"
+                                                @click="clearRecentDecks"
+                                            >
+                                                清空最近使用
+                                            </n-button>
+                                            <n-button
+                                                text
+                                                type="primary"
+                                                size="tiny"
+                                                :disabled="!!activeRun"
+                                                :loading="refreshingDecks"
+                                                @click="refreshBotConfigs"
+                                            >
+                                                刷新 bot.conf
+                                            </n-button>
+                                        </div>
                                     </div>
                                     <div class="deck-list-box">
                                         <button
@@ -1117,7 +1168,7 @@ onBeforeUnmount(() => {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <tr v-for="matchup in displayedRun.matchups" :key="matchup.id">
+                                        <tr v-for="matchup in regressionRows" :key="matchup.id">
                                             <td class="deck-cell">
                                                 <strong>{{ matchup.label }}</strong>
                                                 <small>
@@ -1133,7 +1184,12 @@ onBeforeUnmount(() => {
                                             <td class="score current-score">
                                                 {{ matchup.competitors[0]?.win || 0 }} /
                                                 {{ matchup.competitors[0]?.lose || 0 }} /
-                                                {{ matchup.competitors[0]?.flee || 0 }}
+                                                <span
+                                                    class="flee-count"
+                                                    :class="{ 'is-nonzero': matchup.competitors[0]?.flee > 0 }"
+                                                >
+                                                    {{ matchup.competitors[0]?.flee || 0 }}
+                                                </span>
                                             </td>
                                             <td
                                                 class="deck-win-rate"
@@ -1156,7 +1212,7 @@ onBeforeUnmount(() => {
                                         <tr>
                                             <th>对手卡组</th>
                                             <th>已统计 / 已创建</th>
-                                            <th>挑战卡组 胜/负</th>
+                                            <th>挑战卡组 胜/负/逃</th>
                                             <th>挑战卡组胜率</th>
                                         </tr>
                                     </thead>
@@ -1176,7 +1232,13 @@ onBeforeUnmount(() => {
                                             </td>
                                             <td class="score current-score">
                                                 {{ matchup.competitors[0]?.win || 0 }} /
-                                                {{ matchup.competitors[0]?.lose || 0 }}
+                                                {{ matchup.competitors[0]?.lose || 0 }} /
+                                                <span
+                                                    class="flee-count"
+                                                    :class="{ 'is-nonzero': matchup.competitors[0]?.flee > 0 }"
+                                                >
+                                                    {{ matchup.competitors[0]?.flee || 0 }}
+                                                </span>
                                             </td>
                                             <td class="deck-win-rate">
                                                 {{ formatPercent(matchup.currentWinRate) }}
@@ -1214,7 +1276,12 @@ onBeforeUnmount(() => {
                                             <td class="score current-score">
                                                 {{ entry.competitors[0]?.win || 0 }} /
                                                 {{ entry.competitors[0]?.lose || 0 }} /
-                                                {{ entry.competitors[0]?.flee || 0 }}
+                                                <span
+                                                    class="flee-count"
+                                                    :class="{ 'is-nonzero': entry.competitors[0]?.flee > 0 }"
+                                                >
+                                                    {{ entry.competitors[0]?.flee || 0 }}
+                                                </span>
                                             </td>
                                             <td class="deck-win-rate">{{ formatPercent(entry.currentWinRate) }}</td>
                                         </tr>
@@ -1247,10 +1314,14 @@ onBeforeUnmount(() => {
                                 >
                                     <span class="history-status" :class="`status-${run.status}`"></span>
                                     <span class="history-main">
-                                        <strong>
-                                            {{ runKindLabels[run.kind] || run.kind }} · {{ run.matchupCount }} 个卡组
+                                        <strong :title="formatHistoryTitle(run)">
+                                            {{ formatHistoryTitle(run) }}
                                         </strong>
-                                        <small>{{ formatDate(run.createdAt) }} · {{ statusLabels[run.status] }}</small>
+                                        <small>
+                                            {{ formatDate(run.createdAt) }}
+                                            · {{ formatDuration(getRunElapsedMilliseconds(run)) }}
+                                            · {{ statusLabels[run.status] }}
+                                        </small>
                                     </span>
                                     <code>{{ run.id.slice(0, 8).toUpperCase() }}</code>
                                 </button>

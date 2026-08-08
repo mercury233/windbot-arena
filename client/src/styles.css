@@ -262,6 +262,12 @@ input {
     height: 16px;
 }
 
+.field-heading-actions {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+}
+
 .system-readout strong {
     display: block;
     overflow: hidden;
@@ -650,7 +656,7 @@ input {
 
 .metric-grid {
     display: grid;
-    grid-template-columns: 1.25fr repeat(4, 1fr);
+    grid-template-columns: repeat(2, 1fr) 1.25fr repeat(2, 1fr);
     border-bottom: 1px solid #1a2c34;
 }
 
@@ -773,6 +779,12 @@ input {
 .result-table .current-score,
 .progress-number {
     color: #63e6d3;
+}
+
+.result-table .flee-count.is-nonzero {
+    color: #ff6b6b;
+    font-size: 1.18em;
+    font-weight: 700;
 }
 
 .result-table .deck-win-rate {
