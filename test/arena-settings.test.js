@@ -78,6 +78,40 @@ test('remote WindBot accepts an HTTP bot.conf URL instead of pasted content', ()
     );
 });
 
+test('switching WindBot modes preserves the inactive mode configuration', () => {
+    const existing = makeValidSettings();
+    Object.assign(existing.windbots.current, {
+        botConfUrl: 'https://windbot.example.com/bot.conf',
+        botConfText: 'remote bot config',
+    });
+    const localInput = structuredClone(existing);
+    localInput.windbots.current = {
+        botConfPath: 'F:\\WindBot\\bot.conf',
+        mode: 'local',
+        port: 2399,
+        runtimeDir: 'F:\\WindBot',
+    };
+
+    const local = validateAndMergeArenaSettings(localInput, existing);
+    assert.equal(local.windbots.current.host, 'current.lan');
+    assert.equal(local.windbots.current.botConfUrl, 'https://windbot.example.com/bot.conf');
+    assert.equal(local.windbots.current.botConfText, 'remote bot config');
+
+    const remoteInput = structuredClone(local);
+    remoteInput.windbots.current = {
+        botConfText: 'updated remote bot config',
+        botConfUrl: '',
+        host: 'updated-current.lan',
+        mode: 'remote',
+        port: 2400,
+    };
+    const remote = validateAndMergeArenaSettings(remoteInput, local);
+    assert.equal(remote.windbots.current.runtimeDir, 'F:\\WindBot');
+    assert.equal(remote.windbots.current.botConfPath, 'F:\\WindBot\\bot.conf');
+    assert.equal(remote.windbots.current.host, 'updated-current.lan');
+    assert.equal(remote.windbots.current.botConfText, 'updated remote bot config');
+});
+
 test('old WindBot may remain incomplete while current-only modes are configured', () => {
     const settings = makeValidSettings();
     settings.windbots.old = createDefaultArenaSettings().windbots.old;

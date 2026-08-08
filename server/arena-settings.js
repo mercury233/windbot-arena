@@ -61,15 +61,17 @@ function readWindBot(input, existing, label) {
         throw new Error(`${label}运行模式无效`);
     }
     const result = {
-        botConfPath: String(source.botConfPath || '').trim(),
-        botConfText: String(source.botConfText || ''),
-        botConfUrl: String(source.botConfUrl || '').trim(),
-        host: String(source.host || '').trim(),
+        ...existing,
         mode,
         port: readInteger(source.port, `${label}服务端口`, 1, 65535),
-        runtimeDir: String(source.runtimeDir || '').trim(),
     };
-    if (mode === 'remote') {
+    if (mode === 'local') {
+        result.botConfPath = String(source.botConfPath || '').trim();
+        result.runtimeDir = String(source.runtimeDir || '').trim();
+    } else {
+        result.botConfText = String(source.botConfText || '');
+        result.botConfUrl = String(source.botConfUrl || '').trim();
+        result.host = String(source.host || '').trim();
         if (result.botConfUrl) {
             let url;
             try {
@@ -85,7 +87,7 @@ function readWindBot(input, existing, label) {
             }
         }
     }
-    return { ...existing, ...result };
+    return result;
 }
 
 function validateAndMergeArenaSettings(input, existing) {
