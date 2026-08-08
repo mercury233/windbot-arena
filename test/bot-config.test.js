@@ -89,6 +89,18 @@ test('buildRegressionMatchups creates generalized competitors', (context) => {
     assert.equal(matchups[0].aiLevel, 4);
     assert.equal(matchups[0].competitors[0].dialog, 'dragon');
     assert.equal(matchups[0].competitors[1].dialog, null);
+
+    const [challengeMatchup] = buildChallengeMatchups(
+        settings,
+        'Dragon — Legacy Dragon',
+        ['Deck With Spaces'],
+        'old',
+    );
+    assert.equal(challengeMatchup.competitors[0].endpointPort, 2398);
+    assert.equal(challengeMatchup.competitors[0].executionMode, 'local');
+    assert.equal(challengeMatchup.competitors[0].dialog, null);
+    assert.equal(challengeMatchup.competitors[1].endpointPort, 2399);
+    assert.equal(challengeMatchup.competitors[1].executionMode, 'local');
 });
 
 test('remote WindBot uses pasted bot.conf and remote endpoint', () => {
@@ -149,6 +161,12 @@ test('challenge shares the target rank and keeps opponent bot names', () => {
         host: 'windbot-current.lan',
         mode: 'remote',
     };
+    settings.windbots.old = {
+        ...settings.windbots.old,
+        botConfText: botConfig.replace('Dragon Bot', 'Legacy Dragon'),
+        host: 'windbot-old.lan',
+        mode: 'remote',
+    };
     const matchups = buildChallengeMatchups(settings, 'ManualExecutor', []);
 
     assert.deepEqual(matchups.map((item) => item.label), [
@@ -166,6 +184,18 @@ test('challenge shares the target rank and keeps opponent bot names', () => {
     assert.ok(matchups.every((item) => item.competitors[0].rankName === 'ManualExecutor'));
     assert.equal(matchups.at(-1).competitors[1].rankName, '对手-ManualExecutor');
     assert.equal(new Set(matchups.flatMap((item) => item.competitors.map((bot) => bot.rankName))).size, 5);
+
+    const [oldTargetMatchup] = buildChallengeMatchups(
+        settings,
+        'Dragon — Legacy Dragon',
+        ['Deck With Spaces'],
+        'old',
+    );
+    assert.equal(oldTargetMatchup.competitors[0].deck, 'Dragon');
+    assert.equal(oldTargetMatchup.competitors[0].endpointHost, 'windbot-old.lan');
+    assert.equal(oldTargetMatchup.competitors[0].botLabel, 'Legacy Dragon');
+    assert.equal(oldTargetMatchup.competitors[1].endpointHost, 'windbot-current.lan');
+    assert.equal(oldTargetMatchup.competitors[1].botLabel, 'Quoted Bot');
 
     const beginnerMatchups = buildChallengeMatchups(settings, 'Beginner', []);
     assert.ok(beginnerMatchups.some((item) => item.label === 'Beginner'));
@@ -228,7 +258,9 @@ test('current-only modes remain available when the old WindBot is not configured
     };
     const inspection = inspectConfiguration(settings);
     assert.equal(inspection.modes.challenge.valid, true);
+    assert.equal(inspection.modes.challengeOld.valid, false);
     assert.equal(inspection.modes.ranking.valid, true);
     assert.equal(inspection.modes.regression.valid, false);
     assert.equal(inspection.currentDecks.length, 4);
+    assert.equal(inspection.oldDecks.length, 0);
 });

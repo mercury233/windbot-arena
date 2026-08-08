@@ -297,6 +297,7 @@ class ArenaService {
         const inspection = inspectConfiguration(settings);
         return {
             currentDecks: inspection.currentDecks,
+            oldDecks: inspection.oldDecks,
             regressionDecks: inspection.decks,
         };
     }
@@ -322,18 +323,30 @@ class ArenaService {
             kind === 'challenge'
             && (typeof input.targetDeck !== 'string' || input.targetDeck.trim() === '')
         ) {
-            throw requestError('挑战卡组名称不能为空');
+            throw requestError('挑战者卡组名称不能为空');
+        }
+        const challengerVersion = kind === 'challenge'
+            ? input.challengerVersion || 'current'
+            : null;
+        if (kind === 'challenge' && !['current', 'old'].includes(challengerVersion)) {
+            throw requestError('挑战者版本无效');
         }
         let gamesPerMatchup = 0;
-        if (kind === 'regression') {
-            gamesPerMatchup = Number(input.gamesPerMatchup);
+        if (kind === 'challenge' || kind === 'regression') {
+            gamesPerMatchup = kind === 'challenge' && input.gamesPerMatchup === undefined
+                ? 100
+                : Number(input.gamesPerMatchup);
             if (!Number.isInteger(gamesPerMatchup) || gamesPerMatchup < 1 || gamesPerMatchup > 10000) {
-                throw requestError('每个卡组的局数必须是 1 到 10000 之间的整数');
+                throw requestError(
+                    `${kind === 'challenge' ? '每个对手' : '每个卡组'}的局数必须是 1 到 10000 之间的整数`,
+                );
             }
         }
 
         const { settings } = this.database.getArenaSettings();
-        const modeConfiguration = inspectConfiguration(settings).modes[kind];
+        const modeConfiguration = inspectConfiguration(settings).modes[
+            kind === 'challenge' && challengerVersion === 'old' ? 'challengeOld' : kind
+        ];
         if (!modeConfiguration.valid) {
             throw requestError(`系统配置未完成：${modeConfiguration.issues.join('；')}`);
         }
@@ -341,7 +354,12 @@ class ArenaService {
         let normalizedTargetDeck = null;
         try {
             if (kind === 'challenge') {
-                matchups = buildChallengeMatchups(settings, input.targetDeck, input.decks);
+                matchups = buildChallengeMatchups(
+                    settings,
+                    input.targetDeck,
+                    input.decks,
+                    challengerVersion,
+                );
                 normalizedTargetDeck = matchups[0].competitors[0].deck;
             } else if (kind === 'ranking') {
                 matchups = buildRankingEntries(settings, input.decks);
@@ -354,6 +372,7 @@ class ArenaService {
         const id = crypto.randomUUID();
         const stored = this.database.createRun({
             config: {
+                ...(kind === 'challenge' ? { challengerVersion } : {}),
                 duelServer: `${settings.srvpro.host}:${settings.srvpro.duelPort}`,
                 windbots: Object.fromEntries(
                     Object.entries(settings.windbots).map(([name, instance]) => [name, {
@@ -373,6 +392,7 @@ class ArenaService {
 
         const context = {
             abortController: new AbortController(),
+            challengerVersion,
             children: [],
             finished: false,
             gamesPerMatchup,
@@ -391,7 +411,7 @@ class ArenaService {
             ),
             settings,
             stopReason: null,
-            totalGames: kind === 'regression' ? matchups.length * gamesPerMatchup : 0,
+            totalGames: kind === 'ranking' ? 0 : matchups.length * gamesPerMatchup,
         };
         this.current = context;
         this.markChanged('created');
@@ -413,7 +433,10 @@ class ArenaService {
             this.markChanged('run-event');
 
             const instances = [['current', '新版', context.settings.windbots.current]];
-            if (context.kind === 'regression') {
+            if (
+                context.kind === 'regression'
+                || (context.kind === 'challenge' && context.challengerVersion === 'old')
+            ) {
                 instances.push(['old', '旧版', context.settings.windbots.old]);
             }
             const readiness = instances.map(([name, label, instance]) => {
@@ -441,13 +464,13 @@ class ArenaService {
                 context.id,
                 'info',
                 'running',
-                `${context.kind === 'regression' ? '两套' : '新版'} WindBot 已就绪，开始创建对局`,
+                `${instances.length === 2 ? '两套' : '新版'} WindBot 已就绪，开始创建对局`,
             );
             this.markChanged('running');
             context.scorePoller = this.pollScores(context);
             await this.scheduleGames(context);
 
-            if (context.kind !== 'regression') {
+            if (context.kind === 'ranking') {
                 throw new Error('无限测试的调度意外结束');
             }
             this.database.setRunStatus(context.id, 'settling');
@@ -781,7 +804,7 @@ class ArenaService {
         const { scheduler, srvpro } = context.settings;
         let consecutiveErrors = 0;
         let launchedGames = 0;
-        while (context.kind !== 'regression' || launchedGames < context.totalGames) {
+        while (context.kind === 'ranking' || launchedGames < context.totalGames) {
             try {
                 const roomCount = await this.getRoomCount(context);
                 this.database.setRoomCount(context.id, roomCount);
@@ -789,9 +812,9 @@ class ArenaService {
                 const toLaunch = Math.min(
                     availableRooms,
                     scheduler.pairsPerTick,
-                    context.kind === 'regression'
-                        ? context.totalGames - launchedGames
-                        : scheduler.pairsPerTick,
+                    context.kind === 'ranking'
+                        ? scheduler.pairsPerTick
+                        : context.totalGames - launchedGames,
                 );
 
                 for (let index = 0; index < toLaunch; index++) {
@@ -811,7 +834,7 @@ class ArenaService {
                     }
 
                     let matchupIndex = context.nextMatchupIndex;
-                    if (context.kind === 'regression') {
+                    if (context.kind !== 'ranking') {
                         matchupIndex = -1;
                         for (let offset = 0; offset < context.matchups.length; offset++) {
                             const candidate = (context.nextMatchupIndex + offset) % context.matchups.length;

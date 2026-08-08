@@ -294,6 +294,11 @@ class ArenaDatabase {
             items.push(mapCompetitor(competitor));
             competitorsByMatchup.set(competitor.matchup_id, items);
         }
+        if (run.kind === 'challenge') {
+            run.challengeTargetFlee = competitorRows.find(
+                (competitor) => competitor.source === 'target',
+            )?.flee || 0;
+        }
         run.matchups = matchupRows.map((matchup) => {
             const competitors = competitorsByMatchup.get(matchup.id) || [];
             if (run.kind === 'challenge' && competitors.length > 1) {
@@ -324,15 +329,18 @@ class ArenaDatabase {
                 targetGames: matchup.target_games,
                 currentWinRate: decidedGames === 0 ? 0 : competitors[0].win / decidedGames,
             };
-        }).sort((left, right) => {
-            if (left.aiLevel === null) {
-                return right.aiLevel === null ? left.label.localeCompare(right.label) : 1;
-            }
-            if (right.aiLevel === null) {
-                return -1;
-            }
-            return right.aiLevel - left.aiLevel || left.label.localeCompare(right.label);
         });
+        if (run.kind !== 'challenge') {
+            run.matchups.sort((left, right) => {
+                if (left.aiLevel === null) {
+                    return right.aiLevel === null ? left.label.localeCompare(right.label) : 1;
+                }
+                if (right.aiLevel === null) {
+                    return -1;
+                }
+                return right.aiLevel - left.aiLevel || left.label.localeCompare(right.label);
+            });
+        }
         const observedGames = run.matchups.reduce((sum, item) => sum + item.observedGames, 0);
         run.observedGames = run.kind === 'ranking'
             ? run.matchups.reduce((sum, item) => sum + (item.competitors[0]?.win || 0), 0)

@@ -79,6 +79,19 @@ function getCurrentCatalog(settings) {
         });
 }
 
+function getOldCatalog(settings) {
+    return [...loadBotsFromInstance(settings.windbots.old, '旧版').values()]
+        .sort((left, right) => {
+            if (left.aiLevel === null) {
+                return right.aiLevel === null ? left.deck.localeCompare(right.deck) : 1;
+            }
+            if (right.aiLevel === null) {
+                return -1;
+            }
+            return right.aiLevel - left.aiLevel || left.deck.localeCompare(right.deck);
+        });
+}
+
 function validateWindBotRuntime(instance, label) {
     if (instance.mode === 'local') {
         const exePath = path.join(instance.runtimeDir, 'WindBot.exe');
@@ -190,28 +203,37 @@ function buildRegressionMatchups(settings, requestedDecks) {
     return matchups;
 }
 
-function buildChallengeMatchups(settings, targetDeckInput, requestedDecks) {
-    const instance = settings.windbots.current;
-    validateWindBotRuntime(instance, '新版');
+function buildChallengeMatchups(settings, targetDeckInput, requestedDecks, challengerVersion = 'current') {
+    if (!['current', 'old'].includes(challengerVersion)) {
+        throw new Error('挑战者版本无效');
+    }
+    const targetInstance = settings.windbots[challengerVersion];
+    const opponentInstance = settings.windbots.current;
+    validateWindBotRuntime(targetInstance, challengerVersion === 'current' ? '新版' : '旧版');
+    if (challengerVersion === 'old') {
+        validateWindBotRuntime(opponentInstance, '新版');
+    }
     const requestedTargetDeck = String(targetDeckInput || '').trim();
     if (!requestedTargetDeck) {
-        throw new Error('挑战卡组名称不能为空');
+        throw new Error('挑战者卡组名称不能为空');
     }
 
-    const catalog = getCurrentCatalog(settings);
-    const catalogByDeck = new Map(catalog.map((bot) => [bot.deck, bot]));
-    const targetDeck = catalog.find((bot) => (
+    const opponentCatalog = getCurrentCatalog(settings);
+    const opponentCatalogByDeck = new Map(opponentCatalog.map((bot) => [bot.deck, bot]));
+    const targetCatalog = challengerVersion === 'current' ? opponentCatalog : getOldCatalog(settings);
+    const targetCatalogByDeck = new Map(targetCatalog.map((bot) => [bot.deck, bot]));
+    const targetDeck = targetCatalog.find((bot) => (
         requestedTargetDeck === `${bot.deck} — ${bot.label}`
     ))?.deck || requestedTargetDeck;
     let opponentDecks;
     if (requestedDecks?.length) {
         opponentDecks = [...new Set(requestedDecks.map((deck) => deck.trim()))];
-        const missing = opponentDecks.filter((deck) => !catalogByDeck.has(deck));
+        const missing = opponentDecks.filter((deck) => !opponentCatalogByDeck.has(deck));
         if (missing.length > 0) {
             throw new Error(`这些对手不在新版 bot.conf 列表中: ${missing.join(', ')}`);
         }
     } else {
-        opponentDecks = catalog.filter((bot) => bot.aiLevel !== 1).map((bot) => bot.deck);
+        opponentDecks = opponentCatalog.filter((bot) => bot.aiLevel !== 1).map((bot) => bot.deck);
         if (!opponentDecks.includes(targetDeck)) {
             opponentDecks.push(targetDeck);
         }
@@ -220,31 +242,36 @@ function buildChallengeMatchups(settings, targetDeckInput, requestedDecks) {
         throw new Error('至少需要一个对手卡组');
     }
 
-    const targetBot = catalogByDeck.get(targetDeck) || {
+    const targetBot = targetCatalogByDeck.get(targetDeck) || {
         aiLevel: null,
         deck: targetDeck,
         dialog: 'default',
         label: targetDeck,
     };
     const matchups = opponentDecks.map((opponentDeck) => {
-        const opponent = catalogByDeck.get(opponentDeck) || targetBot;
+        const opponent = opponentCatalogByDeck.get(opponentDeck) || {
+            aiLevel: null,
+            deck: opponentDeck,
+            dialog: 'default',
+            label: opponentDeck,
+        };
         return {
             aiLevel: opponent.aiLevel,
             label: opponentDeck,
             competitors: [
                 makeCompetitor(
-                    instance,
+                    targetInstance,
                     targetBot,
                     'target',
                     1,
                     targetBot.deck,
                 ),
                 makeCompetitor(
-                    instance,
+                    opponentInstance,
                     opponent,
                     'opponent',
                     2,
-                    catalogByDeck.has(opponentDeck) ? opponent.label : `对手-${opponent.deck}`,
+                    opponentCatalogByDeck.has(opponentDeck) ? opponent.label : `对手-${opponent.deck}`,
                 ),
             ],
         };
@@ -368,6 +395,25 @@ function inspectConfiguration(settings) {
             currentIssues.push(error.message);
         }
     }
+    let oldDecks = [];
+    if (!oldIssues.some((issue) => issue.includes('bot.conf'))) {
+        try {
+            oldDecks = getOldCatalog(settings).map((item) => ({
+                aiLevel: item.aiLevel,
+                currentLabel: item.label,
+                deck: item.deck,
+            }));
+            if (oldDecks.length === 0) {
+                oldIssues.push('旧版 bot.conf 没有可运行的卡组');
+            }
+        } catch (error) {
+            oldIssues.push(error.message);
+        }
+    }
+    const oldChallengeIssues = [...currentIssues, ...oldIssues];
+    if (getWindBotEndpoint(settings.windbots.current) === getWindBotEndpoint(settings.windbots.old)) {
+        oldChallengeIssues.push('新版和旧版 WindBot 不能使用同一服务地址与端口');
+    }
     const currentMode = { issues: currentIssues, valid: currentIssues.length === 0 };
     return {
         currentDecks,
@@ -375,9 +421,11 @@ function inspectConfiguration(settings) {
         issues: regressionIssues,
         modes: {
             challenge: currentMode,
+            challengeOld: { issues: oldChallengeIssues, valid: oldChallengeIssues.length === 0 },
             ranking: currentMode,
             regression: { issues: regressionIssues, valid: regressionIssues.length === 0 },
         },
+        oldDecks,
         valid: regressionIssues.length === 0,
     };
 }
@@ -387,6 +435,7 @@ module.exports = {
     buildRankingEntries,
     buildRegressionMatchups,
     getCurrentCatalog,
+    getOldCatalog,
     getRegressionCatalog,
     inspectConfiguration,
     loadBotConfigText,

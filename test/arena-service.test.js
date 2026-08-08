@@ -56,7 +56,7 @@ test('ranking scheduler draws two distinct random entries and records one pair l
     assert.equal(context.matchups.reduce((sum, entry) => sum + entry.launchedGames, 0), 40);
 });
 
-test('challenge scheduler rotates through every opponent until stopped', async () => {
+test('challenge scheduler rotates through opponents in list order and stops at the target', async () => {
     const launchedLabels = [];
     const database = {
         addEvent() {},
@@ -65,6 +65,8 @@ test('challenge scheduler rotates through every opponent until stopped', async (
     };
     const service = new ArenaService({}, database);
     const context = makeSchedulingContext('challenge', ['A', 'B', 'C']);
+    context.gamesPerMatchup = 2;
+    context.totalGames = 6;
     context.matchups.forEach((matchup) => {
         matchup.competitors.push({ rankName: `${matchup.label}-opponent` });
     });
@@ -72,12 +74,9 @@ test('challenge scheduler rotates through every opponent until stopped', async (
     service.launchMatchup = async (activeContext, matchup) => {
         assert.equal(activeContext, context);
         launchedLabels.push(matchup.label);
-        if (launchedLabels.length === 6) {
-            context.abortController.abort(new DOMException('测试结束', 'AbortError'));
-        }
     };
 
-    await assert.rejects(service.scheduleGames(context), /测试结束/);
+    await service.scheduleGames(context);
     assert.deepEqual(launchedLabels, ['A', 'B', 'C', 'A', 'B', 'C']);
     assert.deepEqual(context.matchups.map((entry) => entry.launchedGames), [2, 2, 2]);
 });
@@ -245,6 +244,7 @@ test('deck listing keeps current decks available without an old WindBot', () => 
 
     assert.deepEqual(service.listDecks(), {
         currentDecks: [{ aiLevel: null, currentLabel: 'Current', deck: 'Dragon' }],
+        oldDecks: [],
         regressionDecks: [],
     });
 });
@@ -290,6 +290,7 @@ test('startup events update the active-run revision while WindBot is still start
     const service = new ArenaService({}, database);
     const context = {
         abortController: new AbortController(),
+        challengerVersion: 'old',
         children: [],
         finished: false,
         id: 'startup-run',
@@ -297,6 +298,7 @@ test('startup events update the active-run revision while WindBot is still start
         settings: {
             windbots: {
                 current: { host: 'current.lan', mode: 'remote', port: 2399 },
+                old: { host: 'old.lan', mode: 'remote', port: 2398 },
             },
         },
     };
@@ -308,16 +310,20 @@ test('startup events update the active-run revision while WindBot is still start
     let reachedWindBot;
     const windBotReady = new Promise((resolve) => { releaseWindBot = resolve; });
     const windBotWaiting = new Promise((resolve) => { reachedWindBot = resolve; });
+    let waitingWindBots = 0;
     service.waitForWindBot = async () => {
-        reachedWindBot();
+        waitingWindBots++;
+        if (waitingWindBots === 2) {
+            reachedWindBot();
+        }
         await windBotReady;
     };
 
     const execution = service.execute(context);
     await windBotWaiting;
 
-    assert.deepEqual(eventTypes, ['preparing', 'server-ready', 'remote-windbot']);
-    assert.deepEqual(service.getRevisions(), { active: 3, runs: 1, system: 0 });
+    assert.deepEqual(eventTypes, ['preparing', 'server-ready', 'remote-windbot', 'remote-windbot']);
+    assert.deepEqual(service.getRevisions(), { active: 4, runs: 1, system: 0 });
 
     releaseWindBot();
     await execution;
@@ -349,6 +355,75 @@ test('run creation rejects incomplete settings before persisting a run', () => {
     );
     assert.equal(createdRunCount, 0);
     assert.equal(service.current, null);
+});
+
+test('challenge run defaults to 100 games per opponent and has a finite total', () => {
+    const settings = createDefaultArenaSettings();
+    Object.assign(settings.srvpro, {
+        host: 'srvpro.lan',
+        password: 'secret',
+        username: 'arena',
+    });
+    Object.assign(settings.windbots.current, {
+        botConfText: [
+            '!Alpha',
+            'Name=Alpha Deck=Alpha Dialog=default',
+            '!Beta',
+            'Name=Beta Deck=Beta Dialog=default',
+            '!Gamma',
+            'Name=Gamma Deck=Gamma Dialog=default',
+        ].join('\n'),
+        host: 'current.lan',
+        mode: 'remote',
+    });
+    Object.assign(settings.windbots.old, {
+        botConfText: [
+            '!Legacy Alpha',
+            'Name=Alpha Deck=Alpha Dialog=legacy',
+        ].join('\n'),
+        host: 'old.lan',
+        mode: 'remote',
+    });
+    let persistedRun;
+    const service = new ArenaService({}, {
+        createRun(run) {
+            persistedRun = run;
+            return {
+                ...run,
+                matchups: run.matchups.map((matchup, index) => ({ ...matchup, id: index + 1 })),
+            };
+        },
+        getArenaSettings: () => ({ settings }),
+    });
+    service.execute = async () => {};
+
+    service.createRun({ decks: ['Beta', 'Gamma'], kind: 'challenge', targetDeck: 'Alpha' });
+
+    assert.equal(persistedRun.gamesPerMatchup, 100);
+    assert.equal(service.current.totalGames, 200);
+
+    service.current = null;
+    service.createRun({
+        decks: ['Beta', 'Gamma'],
+        gamesPerMatchup: 25,
+        kind: 'challenge',
+        targetDeck: 'Alpha',
+    });
+    assert.equal(persistedRun.gamesPerMatchup, 25);
+    assert.equal(service.current.totalGames, 50);
+
+    service.current = null;
+    service.createRun({
+        challengerVersion: 'old',
+        decks: ['Beta'],
+        gamesPerMatchup: 10,
+        kind: 'challenge',
+        targetDeck: 'Alpha — Legacy Alpha',
+    });
+    assert.equal(persistedRun.config.challengerVersion, 'old');
+    assert.equal(persistedRun.config.targetDeck, 'Alpha');
+    assert.equal(persistedRun.matchups[0].competitors[0].endpointHost, 'old.lan');
+    assert.equal(persistedRun.matchups[0].competitors[1].endpointHost, 'current.lan');
 });
 
 test('incomplete settings are persisted and returned for continued editing', async () => {

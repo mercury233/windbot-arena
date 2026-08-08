@@ -473,8 +473,13 @@ input {
     grid-column: 1 / -1;
 }
 
-.target-deck-field {
+.challenge-target-row {
+    display: grid;
     grid-column: 1 / -1;
+    grid-template-columns: minmax(280px, 520px) auto;
+    gap: 18px;
+    align-items: end;
+    justify-content: start;
 }
 
 .deck-list-box {
@@ -1285,6 +1290,11 @@ html[data-theme='light'] body .instance-heading span {
 
     .deck-picker {
         grid-column: auto;
+    }
+
+    .challenge-target-row {
+        grid-column: auto;
+        grid-template-columns: 1fr;
     }
 
     .deck-options {

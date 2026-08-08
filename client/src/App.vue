@@ -47,8 +47,24 @@ const selectedDecks = ref([...storedRecentDecks]);
 const allDecks = ref(false);
 const experimentKind = ref('regression');
 const targetDeck = ref('');
+const challengerVersion = ref('current');
 const deckListExpanded = ref(true);
 const gamesPerMatchup = ref(500);
+const challengeGamesPerMatchup = ref(100);
+const configuredGamesPerMatchup = computed({
+    get: () => (
+        experimentKind.value === 'challenge'
+            ? challengeGamesPerMatchup.value
+            : gamesPerMatchup.value
+    ),
+    set: (value) => {
+        if (experimentKind.value === 'challenge') {
+            challengeGamesPerMatchup.value = value;
+        } else {
+            gamesPerMatchup.value = value;
+        }
+    },
+});
 const loading = ref(true);
 const starting = ref(false);
 const stopping = ref(false);
@@ -101,7 +117,7 @@ const runKindLabels = {
     regression: '新旧回归',
 };
 const runKindDescriptions = {
-    challenge: '指定卡组持续对战全部或选中的对手，直到手动停止。',
+    challenge: '指定卡组按列表顺序轮流对战全部或选中的对手，每组达到计划局数后自动完成。',
     ranking: '从选中卡组中每局随机抽取两个对战，直到手动停止。',
     regression: '新版与旧版使用同一卡组，按计划局数进行回归对战。',
 };
@@ -116,12 +132,18 @@ const currentDeckOptions = computed(() => (system.value?.configuration.currentDe
     currentLabel: item.currentLabel,
     value: item.deck,
 })));
+const oldDeckOptions = computed(() => (system.value?.configuration.oldDecks || []).map((item) => ({
+    aiLevel: item.aiLevel,
+    currentLabel: item.currentLabel,
+    value: item.deck,
+})));
 const catalogDeckOptions = computed(() => (
     experimentKind.value === 'regression' ? regressionDeckOptions.value : currentDeckOptions.value
 ));
 const targetDeckOptions = computed(() => {
     const query = String(targetDeck.value || '').trim().toLocaleLowerCase();
-    return currentDeckOptions.value
+    const options = challengerVersion.value === 'old' ? oldDeckOptions.value : currentDeckOptions.value;
+    return options
         .filter((option) => (
             query === ''
             || option.value.toLocaleLowerCase().includes(query)
@@ -182,7 +204,11 @@ const historyPageCount = computed(() => Math.max(1, Math.ceil(
     historyTotal.value / historyPageSize,
 )));
 const modeConfiguration = computed(() => (
-    system.value?.configuration.modes?.[experimentKind.value]
+    system.value?.configuration.modes?.[
+        experimentKind.value === 'challenge' && challengerVersion.value === 'old'
+            ? 'challengeOld'
+            : experimentKind.value
+    ]
     || { issues: system.value?.configuration.issues || [], valid: system.value?.configuration.valid === true }
 ));
 const configurationReady = computed(() => modeConfiguration.value.valid === true);
@@ -197,7 +223,9 @@ const canStart = computed(() => {
     }
     const selectedCount = allDecks.value ? bulkDeckCount.value : new Set(selectedDecks.value).size;
     if (experimentKind.value === 'challenge') {
-        return String(targetDeck.value || '').trim() !== '' && (allDecks.value || selectedCount > 0);
+        return String(targetDeck.value || '').trim() !== ''
+            && (allDecks.value || selectedCount > 0)
+            && Number.isInteger(challengeGamesPerMatchup.value);
     }
     if (experimentKind.value === 'ranking') {
         return selectedCount >= 2;
@@ -227,6 +255,9 @@ const totals = computed(() => {
             result[index].flee += competitor.flee;
             result[index].games += competitor.games;
         });
+    }
+    if (displayedRun.value?.kind === 'challenge') {
+        result[0].flee = displayedRun.value.challengeTargetFlee || 0;
     }
     return result;
 });
@@ -272,7 +303,7 @@ const elapsedMilliseconds = computed(() => {
 });
 const estimatedCompletionAt = computed(() => {
     const run = displayedRun.value;
-    if (!run || run.kind !== 'regression') {
+    if (!run || run.kind === 'ranking') {
         return null;
     }
     if (terminalStatuses.has(run.status)) {
@@ -351,6 +382,9 @@ async function refresh(domains = allRefreshDomains) {
                 activeRun.value = responses.active.run;
                 if (responses.active.run) {
                     experimentKind.value = responses.active.run.kind;
+                    if (responses.active.run.kind === 'challenge') {
+                        challengerVersion.value = responses.active.run.config?.challengerVersion || 'current';
+                    }
                     selectedRun.value = responses.active.run;
                 } else if (previousActiveId) {
                     const latest = await api(`/api/runs/${previousActiveId}`).catch(() => null);
@@ -406,8 +440,15 @@ async function selectRun(runId) {
         allDecks.value = run.config?.selection === 'all';
         selectedDecks.value = run.matchups.map((matchup) => matchup.label);
         targetDeck.value = run.kind === 'challenge' ? run.config?.targetDeck || '' : '';
-        if (run.kind === 'regression' && run.gamesPerMatchup > 0) {
-            gamesPerMatchup.value = run.gamesPerMatchup;
+        challengerVersion.value = run.kind === 'challenge'
+            ? run.config?.challengerVersion || 'current'
+            : 'current';
+        if (run.gamesPerMatchup > 0) {
+            if (run.kind === 'challenge') {
+                challengeGamesPerMatchup.value = run.gamesPerMatchup;
+            } else if (run.kind === 'regression') {
+                gamesPerMatchup.value = run.gamesPerMatchup;
+            }
         }
     } catch (error) {
         message.error(error.message);
@@ -535,6 +576,8 @@ async function startRun() {
             request.gamesPerMatchup = gamesPerMatchup.value;
         } else if (experimentKind.value === 'challenge') {
             request.targetDeck = String(targetDeck.value || '').trim();
+            request.challengerVersion = challengerVersion.value;
+            request.gamesPerMatchup = challengeGamesPerMatchup.value;
         }
         const body = await api('/api/runs', {
             body: JSON.stringify(request),
@@ -684,7 +727,7 @@ async function copyResults() {
         `状态：${statusLabels[run.status] || run.status}`,
         `创建时间：${formatDate(run.createdAt)}`,
         `已统计对局：${run.observedGames}`,
-        `已创建对局：${run.launchedGames}${run.kind === 'regression' ? ` / ${run.totalGames}` : ''}`,
+        `已创建对局：${run.launchedGames}${run.kind !== 'ranking' ? ` / ${run.totalGames}` : ''}`,
     ];
     if (run.kind === 'ranking') {
         lines.push(`当前榜首：${rankingLeader.value
@@ -692,9 +735,13 @@ async function copyResults() {
             : '统计中'}`);
     } else {
         if (run.kind === 'challenge') {
-            lines.push(`挑战卡组：${run.config?.targetDeck || '—'}`);
+            lines.push(`挑战者卡组：${run.config?.targetDeck || '—'}`);
+            lines.push(`挑战者版本：${run.config?.challengerVersion === 'old' ? '旧版' : '新版'}`);
+            if (run.challengeTargetFlee > 0) {
+                lines.push(`挑战者卡组合计逃跑：${run.challengeTargetFlee}`);
+            }
         }
-        lines.push(`${run.kind === 'challenge' ? '挑战卡组' : '新版'}总胜率：${formatPercent(currentWinRate.value)}`);
+        lines.push(`${run.kind === 'challenge' ? '挑战者卡组' : '新版'}总胜率：${formatPercent(currentWinRate.value)}`);
     }
     lines.push(`已用时间：${formatDuration(elapsedMilliseconds.value)}`, '');
 
@@ -711,14 +758,15 @@ async function copyResults() {
             ].join('\t'));
         }
     } else if (run.kind === 'challenge') {
-        lines.push('对手卡组\t等级 / Bot\t已统计 / 已创建\t挑战卡组 胜 / 负 / 逃\t挑战卡组胜率');
+        lines.push('对手卡组\t等级 / Bot\t统计进度\t挑战者卡组 胜 / 负\t对手逃跑\t挑战者卡组胜率');
         for (const matchup of challengeRows.value) {
             const competitor = matchup.competitors[0];
             lines.push([
                 matchup.label,
                 `${matchup.aiLevel ? `LV${matchup.aiLevel} / ` : ''}${matchup.competitors[1]?.botLabel || '—'}`,
-                `${matchup.observedGames} / ${matchup.launchedGames}`,
-                `${competitor?.win || 0} / ${competitor?.lose || 0} / ${competitor?.flee || 0}`,
+                `${matchup.observedGames} / ${matchup.targetGames}`,
+                `${competitor?.win || 0} / ${competitor?.lose || 0}`,
+                matchup.competitors[1]?.flee || 0,
                 formatPercent(matchup.currentWinRate),
             ].join('\t'));
         }
@@ -943,17 +991,31 @@ onBeforeUnmount(() => {
                             </div>
 
                             <div class="launch-form">
-                                <label v-if="experimentKind === 'challenge'" class="field target-deck-field">
-                                    <span>挑战卡组</span>
-                                    <n-auto-complete
-                                        v-model:value="targetDeck"
-                                        :disabled="!!activeRun"
-                                        :options="targetDeckOptions"
-                                        :render-label="(option) => option.displayLabel"
-                                        clearable
-                                        placeholder="输入执行器名称，可不在 bot.conf 列表中"
-                                    />
-                                </label>
+                                <div v-if="experimentKind === 'challenge'" class="challenge-target-row">
+                                    <label class="field target-deck-field">
+                                        <span>挑战者卡组</span>
+                                        <n-auto-complete
+                                            v-model:value="targetDeck"
+                                            :disabled="!!activeRun"
+                                            :options="targetDeckOptions"
+                                            :render-label="(option) => option.displayLabel"
+                                            clearable
+                                            placeholder="输入执行器名称，可不在 bot.conf 列表中"
+                                        />
+                                    </label>
+                                    <div class="field challenger-version-field">
+                                        <span>挑战者版本</span>
+                                        <n-radio-group
+                                            v-model:value="challengerVersion"
+                                            :disabled="!!activeRun"
+                                            name="challenger-version"
+                                            size="small"
+                                        >
+                                            <n-radio-button value="current">新版</n-radio-button>
+                                            <n-radio-button value="old">旧版</n-radio-button>
+                                        </n-radio-group>
+                                    </div>
+                                </div>
                                 <div class="field field-wide deck-picker">
                                     <div class="field-heading">
                                         <span>{{ experimentKind === 'challenge' ? '对手卡组' : '测试卡组' }}</span>
@@ -1045,14 +1107,14 @@ onBeforeUnmount(() => {
                                     </span>
                                 </div>
                                 <div class="launch-actions">
-                                    <label v-if="experimentKind === 'regression'" class="field games-field">
-                                        <span>每卡组局数</span>
+                                    <label v-if="experimentKind !== 'ranking'" class="field games-field">
+                                        <span>{{ experimentKind === 'challenge' ? '每个对手局数' : '每卡组局数' }}</span>
                                         <n-input-number
-                                            v-model:value="gamesPerMatchup"
+                                            v-model:value="configuredGamesPerMatchup"
                                             :disabled="!!activeRun"
                                             :min="1"
                                             :max="10000"
-                                            :step="50"
+                                            :step="experimentKind === 'challenge' ? 10 : 50"
                                         />
                                     </label>
                                     <n-button
@@ -1099,13 +1161,13 @@ onBeforeUnmount(() => {
 
                             <div class="metric-grid">
                                 <div class="metric primary-metric">
-                                    <span>{{ displayedRun.kind === 'regression' ? '任务进度' : '已统计对局' }}</span>
-                                    <strong v-if="displayedRun.kind === 'regression'" class="progress-value">
+                                    <span>{{ displayedRun.kind !== 'ranking' ? '任务进度' : '已统计对局' }}</span>
+                                    <strong v-if="displayedRun.kind !== 'ranking'" class="progress-value">
                                         {{ progress }}<small>%</small>
                                     </strong>
                                     <strong v-else>{{ displayedRun.observedGames }}</strong>
                                     <n-progress
-                                        v-if="displayedRun.kind === 'regression'"
+                                        v-if="displayedRun.kind !== 'ranking'"
                                         type="line"
                                         :percentage="progress"
                                         :height="5"
@@ -1114,10 +1176,10 @@ onBeforeUnmount(() => {
                                     />
                                 </div>
                                 <div class="metric">
-                                    <span>{{ displayedRun.kind === 'regression' ? '已创建 / 计划' : '已创建对局' }}</span>
+                                    <span>{{ displayedRun.kind !== 'ranking' ? '已创建 / 计划' : '已创建对局' }}</span>
                                     <strong>
                                         {{ displayedRun.launchedGames }}
-                                        <small v-if="displayedRun.kind === 'regression'"> / {{ displayedRun.totalGames }}</small>
+                                        <small v-if="displayedRun.kind !== 'ranking'"> / {{ displayedRun.totalGames }}</small>
                                     </strong>
                                 </div>
                                 <div class="metric">
@@ -1132,8 +1194,14 @@ onBeforeUnmount(() => {
                                     <strong v-else-if="displayedRun.kind === 'challenge'" class="challenge-rate-value">
                                         <span :title="displayedRun.config?.targetDeck || ''">
                                             {{ displayedRun.config?.targetDeck || '—' }}
+                                            · {{ displayedRun.config?.challengerVersion === 'old' ? '旧版' : '新版' }}
                                         </span>
-                                        <small>{{ formatPercent(currentWinRate) }}</small>
+                                        <small>
+                                            {{ formatPercent(currentWinRate) }}
+                                            <template v-if="displayedRun.challengeTargetFlee > 0">
+                                                · 逃跑 {{ displayedRun.challengeTargetFlee }}
+                                            </template>
+                                        </small>
                                     </strong>
                                     <strong v-else>{{ formatPercent(currentWinRate) }}</strong>
                                 </div>
@@ -1145,12 +1213,12 @@ onBeforeUnmount(() => {
                                     <span>
                                         {{ terminalStatuses.has(displayedRun.status)
                                             ? '完成时间'
-                                            : displayedRun.kind === 'regression' ? '预计完成时间' : '运行方式' }}
+                                            : displayedRun.kind !== 'ranking' ? '预计完成时间' : '运行方式' }}
                                     </span>
                                     <strong class="time-value">
                                         {{ terminalStatuses.has(displayedRun.status)
                                             ? formatDate(displayedRun.finishedAt)
-                                            : displayedRun.kind === 'regression'
+                                            : displayedRun.kind !== 'ranking'
                                                 ? estimatedCompletionAt ? formatDate(estimatedCompletionAt) : '估算中'
                                                 : '手动停止' }}
                                     </strong>
@@ -1211,8 +1279,9 @@ onBeforeUnmount(() => {
                                     <thead>
                                         <tr>
                                             <th>对手卡组</th>
-                                            <th>已统计 / 已创建</th>
-                                            <th>挑战卡组 胜/负/逃</th>
+                                            <th>统计进度</th>
+                                            <th>挑战卡组 胜/负</th>
+                                            <th>对手逃跑</th>
                                             <th>挑战卡组胜率</th>
                                         </tr>
                                     </thead>
@@ -1227,17 +1296,19 @@ onBeforeUnmount(() => {
                                             </td>
                                             <td>
                                                 <span class="progress-number">
-                                                    {{ matchup.observedGames }} / {{ matchup.launchedGames }}
+                                                    {{ matchup.observedGames }} / {{ matchup.targetGames }}
                                                 </span>
                                             </td>
                                             <td class="score current-score">
                                                 {{ matchup.competitors[0]?.win || 0 }} /
-                                                {{ matchup.competitors[0]?.lose || 0 }} /
+                                                {{ matchup.competitors[0]?.lose || 0 }}
+                                            </td>
+                                            <td class="score current-score">
                                                 <span
                                                     class="flee-count"
-                                                    :class="{ 'is-nonzero': matchup.competitors[0]?.flee > 0 }"
+                                                    :class="{ 'is-nonzero': matchup.competitors[1]?.flee > 0 }"
                                                 >
-                                                    {{ matchup.competitors[0]?.flee || 0 }}
+                                                    {{ matchup.competitors[1]?.flee || 0 }}
                                                 </span>
                                             </td>
                                             <td class="deck-win-rate">

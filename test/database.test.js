@@ -120,12 +120,12 @@ test('ArenaDatabase derives challenge results from each opponent ranking', (cont
     database.createRun({
         config: { targetDeck: 'Albaz' },
         createdAt: '2026-08-08T00:00:00.000Z',
-        gamesPerMatchup: 0,
+        gamesPerMatchup: 100,
         id: 'challenge-1',
         kind: 'challenge',
         matchups: [
             {
-                aiLevel: 4,
+                aiLevel: 2,
                 competitors: [
                     competitor('Albaz', 'Albaz', 1, 'target'),
                     competitor('Dragon', 'Dragon Bot', 2, 'opponent'),
@@ -133,7 +133,7 @@ test('ArenaDatabase derives challenge results from each opponent ranking', (cont
                 label: 'Dragon',
             },
             {
-                aiLevel: 2,
+                aiLevel: 4,
                 competitors: [
                     competitor('Albaz', 'Albaz', 1, 'target'),
                     competitor('Spellbook', 'Spellbook Bot', 2, 'opponent'),
@@ -150,6 +150,10 @@ test('ArenaDatabase derives challenge results from each opponent ranking', (cont
     database.recordRank('challenge-1', normalizeRank(rawRank), rawRank);
     const run = database.getRun('challenge-1');
 
+    assert.equal(run.challengeTargetFlee, 1);
+    assert.deepEqual(run.matchups.map((matchup) => matchup.label), ['Dragon', 'Spellbook']);
+    assert.ok(run.matchups.every((matchup) => matchup.targetGames === 100));
+    assert.deepEqual(run.matchups.map((matchup) => matchup.competitors[1].flee), [1, 0]);
     const inferredTarget = run.matchups[0].competitors[0];
     assert.deepEqual(
         {
