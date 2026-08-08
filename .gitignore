@@ -1,2 +1,4 @@
-/test-ai-results
-/settings.js
+/data
+/dist
+/node_modules
+/pm2.logs

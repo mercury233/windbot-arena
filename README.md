@@ -1,113 +1,153 @@
-# WindBot 新旧版本对战测试
+# WindBot Arena
 
-`test-ai.js` 用于让当前 WindBot 与旧版 WindBot 使用相同卡组批量对战，并接收 SRVPro 定时发送的排行榜数据，对比各卡组的新旧版本胜率。
+WindBot Arena 是自托管的 WindBot 对战实验控制台。目前提供“新版与旧版使用同一卡组批量对战”的回归测试，并把系统配置、运行进度、排行快照和最终统计保存到 SQLite。
 
-## 目录约定
+Node.js 服务同时负责：
 
-脚本根据自身位置推导当前项目路径，不依赖当前工作目录。典型目录结构如下：
+- 提供 Vue + Naive UI 网站、JSON API 和实时事件；
+- 重启专用 SRVPro、查询房间并创建 Match 模式对局；
+- 管理本地 WindBot 进程，或调用用户手动运行的远程 WindBot Server；
+- 在网页配置的路径接收 SRVPro 排行 POST。
 
-```text
-windbot/
-├─ bin/Release/                 # 当前版本 WindBot
-├─ BotWrapper/bot.conf          # 当前版本机器人列表
-└─ mytest/
-   ├─ test-ai.js
-   ├─ settings.example.js       # 提交到 Git 的配置示例
-   ├─ settings.js               # 本地真实配置，Git 忽略
-   ├─ README.md
-   └─ test-ai-results/          # 运行后自动创建
+## 安装与启动
 
-windbot-old/
-├─ bot.conf                     # 旧版机器人列表
-└─ WindBot/                     # 旧版 WindBot 运行目录
-```
+环境要求：
 
-## 前置条件
+- Node.js 20.19 或更高版本；
+- SQLite 数据目录可持久写入；
+- Arena 能通过网络访问 SRVPro 和远程 WindBot；
+- 使用本地 WindBot 模式时，Arena 所在系统必须能够直接运行 `WindBot.exe`。
 
-- Node.js 18 或更高版本。
-- 当前版本已经构建到 `bin/Release`。
-- 旧版运行目录包含 `WindBot.exe`、`Decks`、`Dialogs` 和运行依赖。
-- 当前 WindBot HTTP 端口为 `2399`，旧版为 `2398`；Windows URL ACL 必须允许当前账户监听这两个端口。
-- 一个测试专用的 SRVPro 服务端。
-  - 支持在运行测试前重启。
-  - 允许多个同一IP的客户端连接。
-  - 将排行榜上限改为1000。
-  - 向本机发送排行榜数据。
-- 本机 `3000` 端口能够接收 SRVPro 的排行榜 POST；如服务端位于其他机器，还需确认防火墙允许访问。
-- 已根据 `settings.example.js` 创建并填写本地 `settings.js`。
-
-首次使用时，在项目根目录执行：
+安装、构建并启动：
 
 ```powershell
-Copy-Item mytest/settings.example.js mytest/settings.js
+npm.cmd install
+npm.cmd run build
+npm.cmd start
 ```
 
-然后编辑 `settings.js`，填写 SRVPro 地址、账号密码、排行榜密钥和旧版路径。
-`settings.js` 已被 Git 忽略，不会提交真实凭据。
+打开 `http://127.0.0.1:3000`，进入“系统配置”填写 SRVPro、两套 WindBot 和调度参数。不再使用 `settings.js` 或配置示例文件。
 
-## 使用方法
+服务启动只读取三个基础环境变量：
 
-在项目根目录或 `mytest` 目录运行均可：
+| 环境变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `WINDBOT_ARENA_HOST` | `0.0.0.0` | HTTP 监听地址 |
+| `WINDBOT_ARENA_PORT` | `3000` | 网站、API 和排行接收端口 |
+| `WINDBOT_ARENA_DATABASE` | `data/arena.sqlite` | SQLite 文件路径 |
+
+开发模式：
 
 ```powershell
-# 测试两份 bot.conf 中全部可用的共同卡组，每个卡组默认 100 局
-node mytest/test-ai.js
-
-# 全部共同卡组，每个卡组 20 局
-node mytest/test-ai.js all 20
-
-# 只测试一个卡组，默认 500 局
-node mytest/test-ai.js Dragunity
-
-# 指定单一卡组的局数
-node mytest/test-ai.js Dragunity 200
-
-# 查看实际参与测试的共同卡组
-node mytest/test-ai.js --list-decks
-
-# 只校验路径、配置和卡组交集，不启动程序、不访问网络
-node mytest/test-ai.js --dry-run
+npm.cmd run dev
 ```
 
-如果当前目录是 `mytest`，将命令中的 `mytest/` 去掉即可。
+前端开发服务器默认位于 `http://127.0.0.1:5173`，API 代理会读取 `WINDBOT_ARENA_PORT`。
 
-## 运行流程
+## 网页配置
 
-正式运行时，脚本会：
+所有业务配置都存储在 SQLite 的 `arena_settings` 表中，包括：
 
-1. 分别读取新版 `BotWrapper/bot.conf` 和旧版 `bot.conf`。
-2. 排除 `AI_LV1` 及需要人工选择牌组文件的 `SELECT_DECKFILE` 条目，取两份列表的交集。
-3. 在 `0.0.0.0:3000` 启动排行榜接收器。
-4. 调用 SRVPro 管理 API **重启服务端**。**此操作会关闭当前所有房间**；脚本会等待 API 恢复后再继续。
-5. 分别在 `2399` 和 `2398` 启动新旧 WindBot HTTP 服务。
-6. 按卡组轮询创建对局，同一卡组的新旧版本成对加入，并交替加入顺序。
-7. 接收排行榜数据，输出逐卡组统计和总体汇总。
+- SRVPro 地址、端口、管理凭据、排行接收路径、排行密钥和容量限制；
+- 新版与旧版 WindBot 的运行模式、HTTP 端点和 `bot.conf`；
+- 对局创建速度、轮询间隔和统计等待时间。
 
-机器人排行榜名称固定为 `新-<bot.conf 显示名称>` 和 `旧-<bot.conf 显示名称>`，因此重复运行不会不断新增排行榜项目。
+管理密码和排行密钥不会由读取 API 返回到浏览器。配置页中的密钥输入框留空会保留已有值。
 
-## 结果文件
+### 本地 WindBot
 
-结果保存在：
+本地模式由 Arena 启动并在任务结束时关闭 `WindBot.exe`。需要配置：
+
+- WindBot 运行目录；
+- `bot.conf` 路径；
+- HTTP Server 端口。
+
+Arena 会使用以下参数启动进程：
 
 ```text
-mytest/test-ai-results/<运行标识>-<卡组或 all>.jsonl
+WindBot.exe ServerMode=True ServerPort=<配置端口> Chat=False
 ```
 
-文件采用 JSON Lines 格式，每行是一条独立记录，主要类型包括：
+Linux NAS 通常无法直接运行 Windows 的 `WindBot.exe`，除非另行提供兼容运行环境。因此 NAS 部署通常应使用远程模式。
 
-- `start`：本次运行配置、卡组及机器人名称映射。
-- `server-rebooted`：SRVPro 已重启并恢复。
-- `rank`：一次排行榜回报及本次测试相关统计。
-- `end`：结束原因、已创建局数和最后统计。
+### 远程 WindBot
 
-控制台中的“严格胜率”按 `胜 / (胜 + 负 + 逃跑)` 计算，逃跑会视为失败；“胜方占比”只比较新旧版本取得的胜局。
+远程模式由用户在其他主机手动启动 WindBot Server。Arena 只负责检查和调用，不会启动或关闭远端进程。需要配置：
 
-按 `Ctrl+C` 可停止调度。脚本会关闭由它启动的两个 WindBot 进程，并保留已经收到的结果。
+- 远端主机名或 IP；
+- WindBot HTTP Server 端口；
+- 远端当前使用的完整 `bot.conf` 内容。
 
-## 本地配置
+Arena 无法读取远端文件系统，因此必须把 `bot.conf` 粘贴到网页。它用于生成可选卡组、机器人显示名称和 Dialog 参数；远端更新配置后应同步更新 Arena。
 
-服务器地址、端口、认证信息、运行路径、房间上限、调度间隔和等待时间集中
-位于 `settings.js`。这些值不是命令行参数，环境变化时直接修改本地配置。
+新版和旧版可以分别选择本地或远程模式，但不能指向同一个 HTTP 端点。
 
-`settings.example.js` 只提供字段结构和安全示例值，应纳入 Git 管理；新增或删除配置项时，
-需要同步更新两个配置文件。
+## Match 模式
+
+Arena 固定向 WindBot 发送 `password=M`。这是 SRVPro 随机对战 Match 模式的协议值，用于让服务端统计胜率，不是可配置的房间密码。
+
+当前胜负结果仍以 SRVPro 定时发送的排行为准。将来若改用专用 SRVPro 或直接从 WindBot 收集结果，应作为新的结果来源设计，而不是把 `M` 暴露为普通配置。
+
+界面中的“新版胜率”按 `新版胜场 /（新版胜场 + 旧版胜场）` 计算。正常完成的对局中它与新版自身的胜负统计一致；逃跑作为异常计数单独展示，不再提供含义高度重叠的第二个胜率指标。
+
+## SRVPro 排行回报
+
+SRVPro 使用表单提交排行：
+
+```text
+POST https://arena.example.com/srvpro/rank
+Content-Type: application/x-www-form-urlencoded
+
+accesskey=<网页中配置的排行接收密钥>
+rank=<JSON 排行数组>
+```
+
+`post_match_scores` 是完整 URL，SRVPro 不会自行追加路径。其中的路径必须与网页配置的“排行接收路径”完全相同；默认值为 `/`，也可以配置为 `/api/rank` 或其他不与 Arena API 冲突的路径。Arena 只接受当前配置路径上的排行 POST。`rank` 使用 `[名称, 统计对象]` 数组格式。未配置密钥或密钥不匹配时，接口返回 `403`。
+
+配置中的 SRVPro 是 Arena 专用实例。每次测试会直接调用管理接口重启服务并清理其房间，无需保护其他业务房间。
+
+## NAS 与专属域名
+
+建议让 Arena 只在 NAS 或容器网络中监听，由 Nginx、Caddy 或 NAS 自带反向代理提供 HTTPS 和域名。
+
+必须注意：
+
+- 当前项目没有内置用户登录。不要把 3000 端口直接暴露到公网；控制台和普通 API 应由反向代理登录、单点登录或私有网络保护。
+- 排行 POST 依靠独立的 `accessKey` 校验。反向代理认证规则应单独放行网页中配置的排行接收路径，并让 SRVPro 的完整回报 URL 使用同一路径。
+- 实时状态使用 Server-Sent Events。Nginx 等代理应关闭该连接的响应缓冲；服务已经发送 `X-Accel-Buffering: no`。
+- 将 `data/` 挂载到持久卷，并定期备份 `arena.sqlite` 及其 WAL 文件。
+- NAS 到 SRVPro、远程 WindBot 的 HTTP 端口必须可达；远程主机还需要正确配置 Windows URL ACL 与防火墙。
+- 如果 NAS 是 Linux/ARM，安装 `better-sqlite3` 时可能需要对应架构的预编译包或本地编译工具。
+
+## 数据结构
+
+默认数据库位于 `data/arena.sqlite`，启用 WAL。主要数据包括：
+
+- `arena_settings`：唯一一份当前系统配置；
+- `runs`：实验类型、状态、计划和时间；
+- `matchups`：实验中的独立对局组；
+- `competitors`：双方来源、卡组、运行模式、端点和统计；
+- `rank_reports`：SRVPro 原始排行快照；
+- `run_events`：准备、调度、停止和错误等关键事件。
+
+项目处于积极开发阶段，不提供数据库升级兼容层。开发期修改表结构后，应使用新库重新开始；确有需要的数据只做一次性手动迁移。
+
+## 项目结构
+
+```text
+client/                      Vue + Naive UI 控制台
+client/src/SettingsModal.vue 网页配置界面
+server/app.js                HTTP API、排行 POST 与静态网站
+server/arena-settings.js     业务配置默认值、校验与脱敏
+server/arena-service.js      测试生命周期、WindBot 与 SRVPro 调度
+server/database.js           SQLite 访问与结果聚合
+server/migrations/           当前数据库初始结构
+server/bot-config.js         本地/远程 bot.conf 解析
+```
+
+验证命令：
+
+```powershell
+npm.cmd test
+npm.cmd run build
+```
