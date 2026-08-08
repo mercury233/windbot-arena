@@ -559,3 +559,47 @@ test('score polling continues after a transient query failure', async (context) 
     assert.equal(events[0][2], 'score-poll-error');
     assert.deepEqual(service.getRevisions(), { active: 1, runs: 0, system: 0 });
 });
+
+test('manual stop queries scores once more after the regular poller exits', async () => {
+    const events = [];
+    const order = [];
+    const statuses = [];
+    const database = {
+        addEvent(...args) {
+            events.push(args);
+        },
+        getRun: () => ({ id: 'manual-stop-run' }),
+        setRunStatus(runId, status) {
+            statuses.push([runId, status]);
+        },
+    };
+    const service = new ArenaService({}, database);
+    const abortController = new AbortController();
+    const activeContext = {
+        abortController,
+        children: [],
+        finished: false,
+        id: 'manual-stop-run',
+        stopReason: null,
+    };
+    activeContext.scorePoller = new Promise((resolve) => {
+        abortController.signal.addEventListener('abort', () => {
+            order.push('poller-exited');
+            resolve();
+        }, { once: true });
+    });
+    service.current = activeContext;
+    service.queryScores = async (context) => {
+        assert.equal(context, activeContext);
+        assert.equal(abortController.signal.aborted, true);
+        order.push('final-query');
+    };
+
+    service.stopRun(activeContext.id);
+    await service.finish(activeContext, 'stopped', activeContext.stopReason);
+
+    assert.deepEqual(order, ['poller-exited', 'final-query']);
+    assert.deepEqual(statuses.map((entry) => entry[1]), ['stopping', 'stopped']);
+    assert.deepEqual(events.map((entry) => entry[2]), ['stopping']);
+    assert.equal(service.current, null);
+});

@@ -21,6 +21,7 @@ const PRIVATE_DUEL_ROOM_MIN = 100000000;
 const PRIVATE_DUEL_ROOM_MAX = 999999999;
 const MAX_WINDBOT_OUTPUT_LENGTH = 2000000;
 const SCORE_POLL_MS = 15000;
+const USER_STOP_REASON = '用户从 Web 界面停止了测试';
 
 function requestError(message, statusCode = 400) {
     const error = new Error(message);
@@ -550,51 +551,60 @@ class ArenaService {
         return body.rooms;
     }
 
+    async queryScores(context, signal) {
+        const srvpro = context.settings.srvpro;
+        const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/getscores');
+        url.searchParams.set('type', 'private');
+        url.searchParams.set('username', srvpro.username);
+        url.searchParams.set('pass', srvpro.password);
+        const response = await fetchWithTimeout(url, 5000, signal);
+        if (!response.ok) {
+            throw new Error(`排行 API 返回 HTTP ${response.status}`);
+        }
+        const body = await response.json();
+        if (body?.type !== 'private' || !Array.isArray(body.scores)) {
+            throw new Error('排行 API 响应格式无效');
+        }
+        const rank = body.scores.map((score, index) => {
+            if (!score || typeof score !== 'object' || Array.isArray(score)) {
+                throw new Error(`排行 API 的 scores[${index}] 不是对象`);
+            }
+            if (typeof score.name !== 'string') {
+                throw new Error(`排行 API 的 scores[${index}].name 不是字符串`);
+            }
+            return [score.name, {
+                combo: score.combo,
+                flee: score.flee,
+                lose: score.lose,
+                win: score.win,
+            }];
+        });
+        if (signal && (signal.aborted || context.finished || this.current !== context)) {
+            return;
+        }
+        this.receiveRank(rank);
+    }
+
+    recordScorePollError(context, error) {
+        this.database.addEvent(
+            context.id,
+            'warning',
+            'score-poll-error',
+            `查询 SRVPro 排行失败: ${error.message}`,
+        );
+        this.markChanged('score-poll-error');
+    }
+
     async pollScores(context, intervalMs = SCORE_POLL_MS) {
         const { signal } = context.abortController;
         while (!signal.aborted && !context.finished && this.current === context) {
             try {
-                const srvpro = context.settings.srvpro;
-                const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/getscores');
-                url.searchParams.set('type', 'private');
-                url.searchParams.set('username', srvpro.username);
-                url.searchParams.set('pass', srvpro.password);
-                const response = await fetchWithTimeout(url, 5000, signal);
-                if (!response.ok) {
-                    throw new Error(`排行 API 返回 HTTP ${response.status}`);
-                }
-                const body = await response.json();
-                if (body?.type !== 'private' || !Array.isArray(body.scores)) {
-                    throw new Error('排行 API 响应格式无效');
-                }
-                const rank = body.scores.map((score, index) => {
-                    if (!score || typeof score !== 'object' || Array.isArray(score)) {
-                        throw new Error(`排行 API 的 scores[${index}] 不是对象`);
-                    }
-                    if (typeof score.name !== 'string') {
-                        throw new Error(`排行 API 的 scores[${index}].name 不是字符串`);
-                    }
-                    return [score.name, {
-                        combo: score.combo,
-                        flee: score.flee,
-                        lose: score.lose,
-                        win: score.win,
-                    }];
-                });
-                if (!signal.aborted && !context.finished && this.current === context) {
-                    this.receiveRank(rank);
-                }
+                await this.queryScores(context, signal);
             } catch (error) {
                 if (signal.aborted || isAbortError(error)) {
                     return;
                 }
-                this.database.addEvent(
-                    context.id,
-                    'warning',
-                    'score-poll-error',
-                    `查询 SRVPro 排行失败: ${error.message}`,
-                );
-                this.markChanged('score-poll-error');
+                this.recordScorePollError(context, error);
             }
             try {
                 await sleep(intervalMs, signal);
@@ -857,13 +867,14 @@ class ArenaService {
         return { matchedRunId: context.id, receivedAt };
     }
 
-    stopRun(runId, reason = '用户从 Web 界面停止了测试') {
+    stopRun(runId, reason = USER_STOP_REASON) {
         if (!this.current || this.current.id !== runId) {
             throw requestError('该测试当前不在运行', 409);
         }
         const context = this.current;
         if (!context.stopReason) {
             context.stopReason = reason;
+            context.queryScoresBeforeStop = reason === USER_STOP_REASON;
             this.database.setRunStatus(runId, 'stopping');
             this.database.addEvent(runId, 'warning', 'stopping', reason);
             context.abortController.abort(new DOMException(reason, 'AbortError'));
@@ -881,6 +892,13 @@ class ArenaService {
             context.abortController.abort(new DOMException('任务已结束', 'AbortError'));
         }
         await context.scorePoller;
+        if (status === 'stopped' && context.queryScoresBeforeStop && context.scorePoller) {
+            try {
+                await this.queryScores(context);
+            } catch (error) {
+                this.recordScorePollError(context, error);
+            }
+        }
         for (const child of context.children) {
             if (child.exitCode === null) {
                 child.kill();
@@ -891,12 +909,14 @@ class ArenaService {
             finishedAt: new Date().toISOString(),
             stopReason: reason,
         });
-        this.database.addEvent(
-            context.id,
-            status === 'failed' ? 'error' : 'info',
-            status,
-            reason,
-        );
+        if (status !== 'stopped') {
+            this.database.addEvent(
+                context.id,
+                status === 'failed' ? 'error' : 'info',
+                status,
+                reason,
+            );
+        }
         if (this.current === context) {
             this.current = null;
         }
