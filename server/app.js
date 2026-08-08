@@ -70,9 +70,9 @@ function createApp(config, database, arenaService, shutdownSignal) {
         response.json(arenaService.getSettings());
     });
 
-    app.put('/api/settings', (request, response, next) => {
+    app.put('/api/settings', async (request, response, next) => {
         try {
-            response.json(arenaService.updateSettings(request.body));
+            response.json(await arenaService.updateSettings(request.body));
         } catch (error) {
             next(error);
         }
@@ -80,9 +80,17 @@ function createApp(config, database, arenaService, shutdownSignal) {
 
     app.get('/api/decks', (request, response, next) => {
         try {
-            response.json({ decks: arenaService.listDecks() });
+            response.json(arenaService.listDecks());
         } catch (error) {
             error.statusCode = 503;
+            next(error);
+        }
+    });
+
+    app.post('/api/decks/refresh', async (request, response, next) => {
+        try {
+            response.json(await arenaService.refreshBotConfigs());
+        } catch (error) {
             next(error);
         }
     });
@@ -90,7 +98,12 @@ function createApp(config, database, arenaService, shutdownSignal) {
     app.get('/api/runs', (request, response) => {
         const requestedLimit = Number(request.query.limit) || 30;
         const limit = Math.min(100, Math.max(1, Math.trunc(requestedLimit)));
-        response.json({ runs: database.listRuns(limit) });
+        const requestedOffset = Number(request.query.offset) || 0;
+        const offset = Math.max(0, Math.trunc(requestedOffset));
+        response.json({
+            runs: database.listRuns(limit, offset),
+            total: database.getRunCount(),
+        });
     });
 
     app.get('/api/runs/active', (request, response) => {
@@ -109,7 +122,7 @@ function createApp(config, database, arenaService, shutdownSignal) {
 
     app.post('/api/runs', (request, response, next) => {
         try {
-            const run = arenaService.createRegressionRun(request.body);
+            const run = arenaService.createRun(request.body);
             response.status(202).json({ run });
         } catch (error) {
             next(error);
@@ -164,7 +177,15 @@ function createApp(config, database, arenaService, shutdownSignal) {
     });
 
     const clientDist = path.join(config.rootDir, 'dist');
-    if (fs.existsSync(path.join(clientDist, 'index.html'))) {
+    if (config.clientDevUrl) {
+        app.use((request, response, next) => {
+            if (request.method === 'GET' && !request.path.startsWith('/api/')) {
+                response.redirect(307, new URL(request.originalUrl, config.clientDevUrl).toString());
+                return;
+            }
+            next();
+        });
+    } else if (fs.existsSync(path.join(clientDist, 'index.html'))) {
         app.use(express.static(clientDist, {
             setHeaders(response, filePath) {
                 if (path.basename(filePath) === 'index.html') {

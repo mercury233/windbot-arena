@@ -18,9 +18,29 @@ test('readRankPayload accepts the SRVPro form body', () => {
     });
 });
 
+test('development backend redirects page requests to the Vite server', async (context) => {
+    const service = { getRankPostPath: () => '/score/report' };
+    const app = createApp({
+        clientDevUrl: 'http://127.0.0.1:5173',
+        rootDir: path.resolve(__dirname, '..'),
+    }, {}, service);
+    const server = createServer(app);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    context.after(() => new Promise((resolve) => server.close(resolve)));
+    const address = server.address();
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/history?page=2`, {
+        redirect: 'manual',
+    });
+    assert.equal(response.status, 307);
+    assert.equal(response.headers.get('location'), 'http://127.0.0.1:5173/history?page=2');
+});
+
 test('settings API saves configuration and the configured rank endpoint checks the stored key', async (context) => {
     let savedSettings;
     let receivedRank;
+    let refreshedDecks = false;
+    let requestedRunPage;
     const publicRecord = {
         secretStatus: { accessKeyConfigured: true, passwordConfigured: true },
         settings: { srvpro: { accessKey: '', password: '' } },
@@ -31,12 +51,22 @@ test('settings API saves configuration and the configured rank endpoint checks t
         getRankPostPath: () => '/score/report',
         getSettings: () => publicRecord,
         receiveRank: (rank) => { receivedRank = rank; },
+        refreshBotConfigs: () => {
+            refreshedDecks = true;
+            return { configuration: {}, fetchedRemoteCount: 1 };
+        },
         updateSettings: (settings) => {
             savedSettings = settings;
             return publicRecord;
         },
     };
-    const database = {};
+    const database = {
+        getRunCount: () => 23,
+        listRuns: (limit, offset) => {
+            requestedRunPage = { limit, offset };
+            return [{ id: 'run-21' }];
+        },
+    };
     const app = createApp({ rootDir: path.resolve(__dirname, '..') }, database, service);
     const server = createServer(app);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -55,6 +85,15 @@ test('settings API saves configuration and the configured rank endpoint checks t
         method: 'PUT',
     });
     assert.equal(savedSettings.srvpro.host, 'srvpro.lan');
+    const refreshResponse = await fetch(`${baseUrl}/api/decks/refresh`, { method: 'POST' });
+    assert.equal(refreshResponse.status, 200);
+    assert.equal(refreshedDecks, true);
+    const runsResponse = await fetch(`${baseUrl}/api/runs?limit=10&offset=20`);
+    assert.deepEqual(await runsResponse.json(), {
+        runs: [{ id: 'run-21' }],
+        total: 23,
+    });
+    assert.deepEqual(requestedRunPage, { limit: 10, offset: 20 });
 
     const rank = [['新-Dragon', { win: 1 }]];
     const rejected = await fetch(`${baseUrl}/score/report`, {

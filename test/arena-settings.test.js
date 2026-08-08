@@ -47,9 +47,37 @@ test('public settings never expose SRVPro secrets', () => {
     assert.equal(result.settings.srvpro.accessKey, '');
     assert.equal(result.secretStatus.passwordConfigured, true);
     assert.equal(result.secretStatus.accessKeyConfigured, true);
+    assert.equal(result.settings.windbots.current.botConfUrl, '');
 });
 
-test('two WindBot definitions cannot point to the same endpoint', () => {
+test('remote WindBot accepts an HTTP bot.conf URL instead of pasted content', () => {
+    const settings = makeValidSettings();
+    settings.windbots.current.botConfText = '';
+    settings.windbots.current.botConfUrl = 'https://windbot.example.com/bot.conf';
+    const result = validateAndMergeArenaSettings(settings, settings);
+    assert.equal(result.windbots.current.botConfUrl, 'https://windbot.example.com/bot.conf');
+
+    settings.windbots.current.botConfUrl = 'file:///srv/windbot/bot.conf';
+    assert.throws(
+        () => validateAndMergeArenaSettings(settings, settings),
+        /只支持 HTTP 或 HTTPS/,
+    );
+});
+
+test('old WindBot may remain incomplete while current-only modes are configured', () => {
+    const settings = makeValidSettings();
+    settings.windbots.old = createDefaultArenaSettings().windbots.old;
+    const localResult = validateAndMergeArenaSettings(settings, settings);
+    assert.equal(localResult.windbots.old.runtimeDir, '');
+    assert.equal(localResult.windbots.old.botConfPath, '');
+
+    settings.windbots.old.mode = 'remote';
+    const remoteResult = validateAndMergeArenaSettings(settings, settings);
+    assert.equal(remoteResult.windbots.old.host, '');
+    assert.equal(remoteResult.windbots.old.botConfText, '');
+});
+
+test('configured WindBot definitions cannot point to the same endpoint', () => {
     const settings = makeValidSettings();
     settings.windbots.old.host = settings.windbots.current.host;
     settings.windbots.old.port = settings.windbots.current.port;

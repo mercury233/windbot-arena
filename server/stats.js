@@ -5,7 +5,8 @@ function calculateStats(raw) {
     const lose = Number(raw?.lose) || 0;
     const flee = Number(raw?.flee) || 0;
     const combo = Number(raw?.combo) || 0;
-    const games = win + lose + flee;
+    // SRVPro 在异常断开时独立累加 flee，它不是与胜负互斥的第三种赛果。
+    const games = win + lose;
     return {
         combo,
         flee,

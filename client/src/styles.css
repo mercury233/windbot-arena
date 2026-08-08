@@ -92,8 +92,7 @@ input {
     object-fit: cover;
 }
 
-.brand strong,
-.brand small {
+.brand strong {
     display: block;
 }
 
@@ -101,14 +100,6 @@ input {
     color: #f0f6f7;
     font-size: 15px;
     letter-spacing: 0.03em;
-}
-
-.brand small {
-    margin-top: 2px;
-    color: #66808a;
-    font-family: 'DM Mono', monospace;
-    font-size: 9px;
-    letter-spacing: 0.14em;
 }
 
 .live-state {
@@ -208,6 +199,7 @@ input {
 
 .system-readout span,
 .field > span,
+.field-heading > span,
 .metric > span {
     display: block;
     margin-bottom: 8px;
@@ -215,6 +207,22 @@ input {
     font-family: 'DM Mono', monospace;
     font-size: 9px;
     letter-spacing: 0.1em;
+}
+
+.field-heading {
+    display: flex;
+    height: 16px;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.field-heading > span {
+    margin-bottom: 0;
+}
+
+.field-heading .n-button {
+    height: 16px;
 }
 
 .system-readout strong {
@@ -254,6 +262,17 @@ input {
     padding: 25px 28px 28px;
 }
 
+.experiment-tabs {
+    display: flex;
+    width: min(520px, 100%);
+    margin-bottom: 24px;
+}
+
+.experiment-tabs .n-radio-button {
+    flex: 1;
+    text-align: center;
+}
+
 .panel-heading,
 .results-header,
 .aside-heading {
@@ -268,13 +287,6 @@ input {
     display: flex;
     gap: 14px;
     align-items: flex-start;
-}
-
-.panel-status {
-    display: inline-flex;
-    flex: 0 0 auto;
-    align-items: center;
-    min-height: 28px;
 }
 
 .section-index {
@@ -300,7 +312,7 @@ input {
 
 .launch-form {
     display: grid;
-    grid-template-columns: 150px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 18px;
     align-items: end;
     margin-top: 26px;
@@ -313,6 +325,10 @@ input {
 }
 
 .deck-picker {
+    grid-column: 1 / -1;
+}
+
+.target-deck-field {
     grid-column: 1 / -1;
 }
 
@@ -439,10 +455,19 @@ input {
     min-height: 40px;
 }
 
-.all-decks-control {
+.deck-bulk-controls,
+.ai-level-controls {
     display: flex;
+    gap: 16px;
     align-items: center;
+    flex-wrap: wrap;
     min-height: 40px;
+}
+
+.ai-level-controls {
+    min-height: auto;
+    padding-left: 16px;
+    border-left: 1px solid #24404a;
 }
 
 .games-field {
@@ -471,7 +496,13 @@ input {
     align-items: center;
 }
 
-.results-header > code,
+.results-actions {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+}
+
+.results-meta code,
 .history-item code {
     color: #4c656e;
     font-family: 'DM Mono', monospace;
@@ -509,6 +540,14 @@ input {
 
 .metric .time-value {
     font-size: 18px;
+}
+
+.metric .leader-value {
+    overflow: hidden;
+    font-family: 'Noto Sans SC', sans-serif;
+    font-size: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .primary-metric strong {
@@ -559,18 +598,18 @@ input {
     border-bottom: 0;
 }
 
-.result-table td:first-child strong,
-.result-table td:first-child small {
+.result-table .deck-cell strong,
+.result-table .deck-cell small {
     display: block;
 }
 
-.result-table td:first-child strong {
+.result-table .deck-cell strong {
     color: #d8e4e7;
     font-family: 'Noto Sans SC', sans-serif;
     font-size: 12px;
 }
 
-.result-table td:first-child small {
+.result-table .deck-cell small {
     margin-top: 2px;
     color: #526a73;
     font-size: 9px;
@@ -584,6 +623,15 @@ input {
 .result-table .deck-win-rate {
     color: #cddadd;
     font-size: 16px;
+}
+
+.result-table .ranking-position {
+    color: #769099;
+    font-size: 15px;
+}
+
+.ranking-table tbody tr:first-child .ranking-position {
+    color: #63e6d3;
 }
 
 .result-table .deck-win-rate.is-significant-win {
@@ -615,6 +663,20 @@ input {
     display: grid;
     gap: 3px;
     padding: 0 8px;
+}
+
+.history-pagination {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: center;
+    margin: 16px 12px 4px;
+}
+
+.history-pagination > span {
+    color: #587079;
+    font-family: 'DM Mono', monospace;
+    font-size: 9px;
 }
 
 .history-item {
@@ -839,7 +901,7 @@ html[data-theme='light'] {
 [data-theme='light'] .hero h1,
 [data-theme='light'] .panel h2,
 [data-theme='light'] .metric strong,
-[data-theme='light'] .result-table td:first-child strong,
+[data-theme='light'] .result-table .deck-cell strong,
 [data-theme='light'] .history-main strong,
 [data-theme='light'] .future-panel strong,
 [data-theme='light'] .deck-option-main strong,
@@ -847,12 +909,12 @@ html[data-theme='light'] body .instance-heading h3 {
     color: #102a32;
 }
 
-[data-theme='light'] .brand small,
 [data-theme='light'] .live-state,
 [data-theme='light'] .theme-control,
 [data-theme='light'] .hero-copy p,
 [data-theme='light'] .system-readout span,
 [data-theme='light'] .field > span,
+[data-theme='light'] .field-heading > span,
 [data-theme='light'] .metric > span,
 [data-theme='light'] .panel-heading p,
 [data-theme='light'] .results-header p,
@@ -915,9 +977,9 @@ html[data-theme='light'] body .windbot-instance {
 [data-theme='light'] .deck-option-main small,
 [data-theme='light'] .ai-level,
 [data-theme='light'] .result-table th,
-[data-theme='light'] .result-table td:first-child small,
+[data-theme='light'] .result-table .deck-cell small,
 [data-theme='light'] .metric strong small,
-[data-theme='light'] .results-header > code,
+[data-theme='light'] .results-meta code,
 [data-theme='light'] .history-item code,
 [data-theme='light'] .aside-heading > span,
 html[data-theme='light'] body .instance-heading span {
@@ -982,10 +1044,6 @@ html[data-theme='light'] body .instance-heading span {
 
     .topbar {
         height: 68px;
-    }
-
-    .brand small {
-        display: none;
     }
 
     .theme-control > span {

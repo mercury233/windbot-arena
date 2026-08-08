@@ -23,6 +23,7 @@ function createDefaultArenaSettings() {
             current: {
                 botConfPath: '',
                 botConfText: '',
+                botConfUrl: '',
                 host: '',
                 mode: 'local',
                 port: 2399,
@@ -31,6 +32,7 @@ function createDefaultArenaSettings() {
             old: {
                 botConfPath: '',
                 botConfText: '',
+                botConfUrl: '',
                 host: '',
                 mode: 'local',
                 port: 2398,
@@ -55,7 +57,7 @@ function readInteger(value, label, minimum, maximum) {
     return number;
 }
 
-function readWindBot(input, existing, label) {
+function readWindBot(input, existing, label, required = true) {
     const source = input || {};
     const mode = source.mode;
     if (!['local', 'remote'].includes(mode)) {
@@ -64,17 +66,37 @@ function readWindBot(input, existing, label) {
     const result = {
         botConfPath: String(source.botConfPath || '').trim(),
         botConfText: String(source.botConfText || ''),
+        botConfUrl: String(source.botConfUrl || '').trim(),
         host: String(source.host || '').trim(),
         mode,
         port: readInteger(source.port, `${label}服务端口`, 1, 65535),
         runtimeDir: String(source.runtimeDir || '').trim(),
     };
     if (mode === 'local') {
-        readText(result.runtimeDir, `${label}运行目录`);
-        readText(result.botConfPath, `${label} bot.conf 路径`);
+        if (required) {
+            readText(result.runtimeDir, `${label}运行目录`);
+            readText(result.botConfPath, `${label} bot.conf 路径`);
+        }
     } else {
-        readText(result.host, `${label}服务地址`);
-        readText(result.botConfText, `${label} bot.conf 内容`);
+        if (required) {
+            readText(result.host, `${label}服务地址`);
+        }
+        if (result.botConfUrl) {
+            let url;
+            try {
+                url = new URL(result.botConfUrl);
+            } catch {
+                throw new Error(`${label}bot.conf URL 无效`);
+            }
+            if (!['http:', 'https:'].includes(url.protocol)) {
+                throw new Error(`${label}bot.conf URL 只支持 HTTP 或 HTTPS`);
+            }
+            if (result.botConfUrl.length > 2000) {
+                throw new Error(`${label}bot.conf URL 不能超过 2000 个字符`);
+            }
+        } else if (required) {
+            readText(result.botConfText, `${label} bot.conf 内容或 URL`);
+        }
     }
     return { ...existing, ...result };
 }
@@ -126,12 +148,17 @@ function validateAndMergeArenaSettings(input, existing) {
         },
         windbots: {
             current: readWindBot(input.windbots?.current, previous.windbots.current, '新版 WindBot '),
-            old: readWindBot(input.windbots?.old, previous.windbots.old, '旧版 WindBot '),
+            old: readWindBot(input.windbots?.old, previous.windbots.old, '旧版 WindBot ', false),
         },
     };
-    const currentEndpoint = getWindBotEndpoint(settings.windbots.current);
-    const oldEndpoint = getWindBotEndpoint(settings.windbots.old);
-    if (currentEndpoint === oldEndpoint) {
+    const old = settings.windbots.old;
+    const oldConfigured = old.mode === 'local'
+        ? old.runtimeDir !== '' && old.botConfPath !== ''
+        : old.host !== '' && (old.botConfText.trim() !== '' || old.botConfUrl !== '');
+    if (
+        oldConfigured
+        && getWindBotEndpoint(settings.windbots.current) === getWindBotEndpoint(old)
+    ) {
         throw new Error('新版和旧版 WindBot 不能使用同一服务地址与端口');
     }
     return settings;
@@ -146,6 +173,9 @@ function getPublicArenaSettings(settings, updatedAt) {
     const result = structuredClone(settings);
     result.srvpro.password = '';
     result.srvpro.accessKey = '';
+    for (const instance of Object.values(result.windbots)) {
+        instance.botConfUrl ||= '';
+    }
     return {
         secretStatus: {
             accessKeyConfigured: settings.srvpro.accessKey !== '',

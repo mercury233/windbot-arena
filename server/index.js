@@ -8,6 +8,9 @@ const { ArenaDatabase } = require('./database');
 
 async function main() {
     const config = loadConfig();
+    if (process.env.npm_lifecycle_event === 'dev:server') {
+        config.clientDevUrl = 'http://127.0.0.1:5173';
+    }
     const database = new ArenaDatabase(config.databasePath);
     const arenaService = new ArenaService(config, database);
     const interrupted = arenaService.initialize();
@@ -26,7 +29,12 @@ async function main() {
         server.once('error', reject);
         server.listen(config.listenPort, config.listenHost, resolve);
     });
-    console.log(`WindBot Arena 已启动: http://${config.listenHost}:${config.listenPort}`);
+    console.log(`WindBot Arena 已启动: ${
+        config.clientDevUrl || `http://${config.listenHost}:${config.listenPort}`
+    }`);
+    if (config.clientDevUrl) {
+        console.log(`Arena API 已启动: http://${config.listenHost}:${config.listenPort}`);
+    }
 
     let shuttingDown = false;
     const shutdown = async (signal) => {

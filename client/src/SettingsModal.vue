@@ -150,12 +150,18 @@ function save() {
                                                 placeholder="远程 WindBot 主机名或 IP"
                                             />
                                         </n-form-item>
-                                        <n-form-item label="远程 bot.conf 内容" class="span-2">
+                                        <n-form-item label="远程 bot.conf URL（可选）" class="span-2">
+                                            <n-input
+                                                v-model:value="draft.windbots[name].botConfUrl"
+                                                placeholder="例如 https://windbot.example.com/bot.conf"
+                                            />
+                                        </n-form-item>
+                                        <n-form-item label="远程 bot.conf 内容（手动或 URL 缓存）" class="span-2">
                                             <n-input
                                                 v-model:value="draft.windbots[name].botConfText"
                                                 type="textarea"
                                                 :autosize="{ minRows: 8, maxRows: 16 }"
-                                                placeholder="粘贴远程实例正在使用的完整 bot.conf"
+                                                placeholder="可直接粘贴；填写 URL 时，保存配置会自动获取并覆盖这里的内容"
                                             />
                                         </n-form-item>
                                     </template>
@@ -170,7 +176,7 @@ function save() {
                                 type="warning"
                                 :bordered="false"
                             >
-                                测试前需在远端手动启动 ServerMode。Arena 只检查并调用该 HTTP 服务，不管理远端进程。
+                                测试前需在远端手动启动 ServerMode。填写 bot.conf URL 后，保存配置会立即获取一次，主界面的刷新按钮可再次拉取。
                             </n-alert>
                         </section>
                     </div>

@@ -9,9 +9,11 @@ const {
     validateAndMergeArenaSettings,
 } = require('./arena-settings');
 const {
+    buildChallengeMatchups,
+    buildRankingEntries,
     buildRegressionMatchups,
-    getRegressionCatalog,
     inspectConfiguration,
+    loadBotConfigText,
 } = require('./bot-config');
 const { normalizeRank } = require('./stats');
 
@@ -93,6 +95,7 @@ class ArenaService extends EventEmitter {
         const inspection = inspectConfiguration(settings);
         return {
             activeRunId: this.current?.id || null,
+            botConfigFingerprints: this.getBotConfigFingerprints(settings),
             configuration: inspection,
             endpoints: {
                 rankPost: settings.srvpro.rankPostPath,
@@ -117,12 +120,23 @@ class ArenaService extends EventEmitter {
         };
     }
 
+    getBotConfigFingerprints(settings) {
+        return Object.fromEntries(Object.entries(settings.windbots).map(([name, instance]) => {
+            try {
+                const content = loadBotConfigText(instance, name === 'current' ? '新版' : '旧版');
+                return [name, crypto.createHash('sha256').update(content).digest('hex')];
+            } catch {
+                return [name, null];
+            }
+        }));
+    }
+
     getSettings() {
         const record = this.database.getArenaSettings();
         return getPublicArenaSettings(record.settings, record.updatedAt);
     }
 
-    updateSettings(input) {
+    async updateSettings(input) {
         if (this.current) {
             throw requestError('测试运行期间不能修改系统配置', 409);
         }
@@ -133,9 +147,80 @@ class ArenaService extends EventEmitter {
         } catch (error) {
             throw requestError(error.message);
         }
+        await this.fetchRemoteBotConfigs(settings);
         const saved = this.database.saveArenaSettings(settings);
         this.emitChange(null, 'settings');
         return getPublicArenaSettings(saved.settings, saved.updatedAt);
+    }
+
+    async fetchRemoteBotConfigs(settings) {
+        const sources = Object.entries(settings.windbots)
+            .filter(([, instance]) => instance.mode === 'remote' && instance.botConfUrl)
+            .map(async ([name, instance]) => {
+                let response;
+                try {
+                    response = await fetchWithTimeout(instance.botConfUrl, 10000);
+                } catch (error) {
+                    throw requestError(
+                        `${name === 'current' ? '新版' : '旧版'} bot.conf URL 获取失败: ${error.message}`,
+                        502,
+                    );
+                }
+                if (!response.ok) {
+                    throw requestError(
+                        `${name === 'current' ? '新版' : '旧版'} bot.conf URL 返回 HTTP ${response.status}`,
+                        502,
+                    );
+                }
+                const contentLength = Number(response.headers.get('content-length'));
+                if (Number.isFinite(contentLength) && contentLength > 2 * 1024 * 1024) {
+                    throw requestError(`${name === 'current' ? '新版' : '旧版'} bot.conf 超过 2 MB`, 502);
+                }
+                let content;
+                try {
+                    content = await response.text();
+                } catch (error) {
+                    throw requestError(
+                        `${name === 'current' ? '新版' : '旧版'} bot.conf URL 读取失败: ${error.message}`,
+                        502,
+                    );
+                }
+                if (Buffer.byteLength(content, 'utf8') > 2 * 1024 * 1024) {
+                    throw requestError(`${name === 'current' ? '新版' : '旧版'} bot.conf 超过 2 MB`, 502);
+                }
+                if (!content.trim()) {
+                    throw requestError(`${name === 'current' ? '新版' : '旧版'} bot.conf URL 返回了空内容`, 502);
+                }
+                return [name, content, content !== instance.botConfText];
+            });
+        const fetched = await Promise.all(sources);
+        for (const [name, content] of fetched) {
+            settings.windbots[name].botConfText = content;
+        }
+        return {
+            changedCount: fetched.filter(([, , changed]) => changed).length,
+            fetchedCount: fetched.length,
+        };
+    }
+
+    async refreshBotConfigs() {
+        if (this.current) {
+            throw requestError('测试运行期间不能刷新 bot.conf', 409);
+        }
+        const record = this.database.getArenaSettings();
+        const settings = structuredClone(record.settings);
+        const { changedCount, fetchedCount } = await this.fetchRemoteBotConfigs(settings);
+        if (fetchedCount > 0) {
+            this.database.saveArenaSettings(settings);
+        }
+        const inspection = inspectConfiguration(settings);
+        this.emitChange(null, 'decks');
+        return {
+            botConfigFingerprints: this.getBotConfigFingerprints(settings),
+            configuration: inspection,
+            contentChanged: changedCount > 0,
+            fetchedRemoteCount: fetchedCount,
+        };
     }
 
     getRankAccessKey() {
@@ -148,20 +233,23 @@ class ArenaService extends EventEmitter {
 
     listDecks() {
         const { settings } = this.database.getArenaSettings();
-        return getRegressionCatalog(settings).map((item) => ({
-            currentLabel: item.current.label,
-            deck: item.deck,
-            oldLabel: item.old.label,
-        }));
+        const inspection = inspectConfiguration(settings);
+        return {
+            currentDecks: inspection.currentDecks,
+            regressionDecks: inspection.decks,
+        };
     }
 
-    createRegressionRun(input = {}) {
+    createRun(input = {}) {
         if (this.current) {
             throw requestError('已有测试正在运行，请先停止当前测试', 409);
         }
-        const gamesPerMatchup = Number(input.gamesPerMatchup);
-        if (!Number.isInteger(gamesPerMatchup) || gamesPerMatchup < 1 || gamesPerMatchup > 10000) {
-            throw requestError('每个对局组的局数必须是 1 到 10000 之间的整数');
+        if (!input || typeof input !== 'object' || Array.isArray(input)) {
+            throw requestError('测试配置必须是对象');
+        }
+        const kind = input.kind || 'regression';
+        if (!['challenge', 'ranking', 'regression'].includes(kind)) {
+            throw requestError('不支持的测试类型');
         }
         if (input.decks !== undefined && !Array.isArray(input.decks)) {
             throw requestError('decks 必须是卡组名称数组');
@@ -169,11 +257,32 @@ class ArenaService extends EventEmitter {
         if (input.decks?.some((deck) => typeof deck !== 'string' || deck.trim() === '')) {
             throw requestError('卡组名称不能为空');
         }
+        if (
+            kind === 'challenge'
+            && (typeof input.targetDeck !== 'string' || input.targetDeck.trim() === '')
+        ) {
+            throw requestError('挑战卡组名称不能为空');
+        }
+        let gamesPerMatchup = 0;
+        if (kind === 'regression') {
+            gamesPerMatchup = Number(input.gamesPerMatchup);
+            if (!Number.isInteger(gamesPerMatchup) || gamesPerMatchup < 1 || gamesPerMatchup > 10000) {
+                throw requestError('每个卡组的局数必须是 1 到 10000 之间的整数');
+            }
+        }
 
         const { settings } = this.database.getArenaSettings();
         let matchups;
+        let normalizedTargetDeck = null;
         try {
-            matchups = buildRegressionMatchups(settings, input.decks);
+            if (kind === 'challenge') {
+                matchups = buildChallengeMatchups(settings, input.targetDeck, input.decks);
+                normalizedTargetDeck = matchups[0].competitors[0].deck;
+            } else if (kind === 'ranking') {
+                matchups = buildRankingEntries(settings, input.decks);
+            } else {
+                matchups = buildRegressionMatchups(settings, input.decks);
+            }
         } catch (error) {
             throw requestError(error.message);
         }
@@ -187,11 +296,13 @@ class ArenaService extends EventEmitter {
                         mode: instance.mode,
                     }]),
                 ),
+                selection: input.decks?.length ? 'selected' : 'all',
+                targetDeck: normalizedTargetDeck,
             },
             createdAt: new Date().toISOString(),
             gamesPerMatchup,
             id,
-            kind: 'regression',
+            kind,
             matchups,
         });
 
@@ -201,6 +312,7 @@ class ArenaService extends EventEmitter {
             finished: false,
             gamesPerMatchup,
             id,
+            kind,
             latestObserved: new Map(),
             matchups: matchups.map((matchup, index) => ({
                 ...matchup,
@@ -210,12 +322,16 @@ class ArenaService extends EventEmitter {
             nextMatchupIndex: 0,
             settings,
             stopReason: null,
-            totalGames: matchups.length * gamesPerMatchup,
+            totalGames: kind === 'regression' ? matchups.length * gamesPerMatchup : 0,
         };
         this.current = context;
         this.emitChange(id, 'created');
         context.done = this.execute(context);
         return stored;
+    }
+
+    createRegressionRun(input = {}) {
+        return this.createRun({ ...input, kind: 'regression' });
     }
 
     async execute(context) {
@@ -229,10 +345,10 @@ class ArenaService extends EventEmitter {
             await this.rebootServer(context);
             this.database.addEvent(context.id, 'info', 'server-ready', 'SRVPro 已重启并恢复服务');
 
-            const instances = [
-                ['新版', context.settings.windbots.current],
-                ['旧版', context.settings.windbots.old],
-            ];
+            const instances = [['新版', context.settings.windbots.current]];
+            if (context.kind === 'regression') {
+                instances.push(['旧版', context.settings.windbots.old]);
+            }
             const readiness = instances.map(([label, instance]) => {
                 const endpointHost = instance.mode === 'local' ? '127.0.0.1' : instance.host;
                 const child = instance.mode === 'local'
@@ -251,10 +367,18 @@ class ArenaService extends EventEmitter {
             await Promise.all(readiness);
 
             this.database.setRunStatus(context.id, 'running');
-            this.database.addEvent(context.id, 'info', 'running', '两套 WindBot 已就绪，开始创建对局');
+            this.database.addEvent(
+                context.id,
+                'info',
+                'running',
+                `${context.kind === 'regression' ? '两套' : '新版'} WindBot 已就绪，开始创建对局`,
+            );
             this.emitChange(context.id, 'running');
             await this.scheduleGames(context);
 
+            if (context.kind !== 'regression') {
+                throw new Error('无限测试的调度意外结束');
+            }
             this.database.setRunStatus(context.id, 'settling');
             this.database.addEvent(context.id, 'info', 'settling', '对局已全部创建，正在等待排行统计回报');
             this.emitChange(context.id, 'settling');
@@ -419,11 +543,27 @@ class ArenaService extends EventEmitter {
         }
     }
 
+    async launchRankingPair(context, entries) {
+        const scheduler = context.settings.scheduler;
+        const players = entries.map((entry) => entry.competitors[0]);
+        if (Math.random() < 0.5) {
+            players.reverse();
+        }
+        await this.addBot(context, players[0]);
+        if (scheduler.pairDelayMs > 0) {
+            await sleep(scheduler.pairDelayMs, context.abortController.signal);
+        }
+        await this.addBot(context, players[1]);
+        if (scheduler.pairDelayMs > 0) {
+            await sleep(scheduler.pairDelayMs, context.abortController.signal);
+        }
+    }
+
     async scheduleGames(context) {
         const { scheduler, srvpro } = context.settings;
         let consecutiveErrors = 0;
         let launchedGames = 0;
-        while (launchedGames < context.totalGames) {
+        while (context.kind !== 'regression' || launchedGames < context.totalGames) {
             try {
                 const roomCount = await this.getRoomCount(context);
                 this.database.setRoomCount(context.id, roomCount);
@@ -431,27 +571,47 @@ class ArenaService extends EventEmitter {
                 const toLaunch = Math.min(
                     availableRooms,
                     scheduler.pairsPerTick,
-                    context.totalGames - launchedGames,
+                    context.kind === 'regression'
+                        ? context.totalGames - launchedGames
+                        : scheduler.pairsPerTick,
                 );
 
                 for (let index = 0; index < toLaunch; index++) {
-                    let matchupIndex = -1;
-                    for (let offset = 0; offset < context.matchups.length; offset++) {
-                        const candidate = (context.nextMatchupIndex + offset) % context.matchups.length;
-                        if (context.matchups[candidate].launchedGames < context.gamesPerMatchup) {
-                            matchupIndex = candidate;
+                    if (context.kind === 'ranking') {
+                        const firstIndex = Math.floor(Math.random() * context.matchups.length);
+                        let secondIndex = Math.floor(Math.random() * (context.matchups.length - 1));
+                        if (secondIndex >= firstIndex) {
+                            secondIndex++;
+                        }
+                        const entries = [context.matchups[firstIndex], context.matchups[secondIndex]];
+                        await this.launchRankingPair(context, entries);
+                        entries.forEach((entry) => { entry.launchedGames++; });
+                        launchedGames++;
+                        this.database.recordLaunch(context.id, entries.map((entry) => entry.id));
+                        this.emitChange(context.id, 'progress');
+                        continue;
+                    }
+
+                    let matchupIndex = context.nextMatchupIndex;
+                    if (context.kind === 'regression') {
+                        matchupIndex = -1;
+                        for (let offset = 0; offset < context.matchups.length; offset++) {
+                            const candidate = (context.nextMatchupIndex + offset) % context.matchups.length;
+                            if (context.matchups[candidate].launchedGames < context.gamesPerMatchup) {
+                                matchupIndex = candidate;
+                                break;
+                            }
+                        }
+                        if (matchupIndex === -1) {
                             break;
                         }
-                    }
-                    if (matchupIndex === -1) {
-                        break;
                     }
                     const matchup = context.matchups[matchupIndex];
                     await this.launchMatchup(context, matchup);
                     matchup.launchedGames++;
                     launchedGames++;
                     context.nextMatchupIndex = (matchupIndex + 1) % context.matchups.length;
-                    this.database.incrementLaunched(context.id, matchup.id);
+                    this.database.recordLaunch(context.id, [matchup.id]);
                     this.emitChange(context.id, 'progress');
                 }
                 consecutiveErrors = 0;

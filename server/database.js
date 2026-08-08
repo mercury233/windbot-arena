@@ -181,7 +181,7 @@ class ArenaDatabase {
                     );
                 }
             });
-            this.addEvent(run.id, 'info', 'created', `已创建 ${run.matchups.length} 个对局组`);
+            this.addEvent(run.id, 'info', 'created', `已创建 ${run.matchups.length} 个卡组`);
         });
         return this.getRun(run.id);
     }
@@ -218,11 +218,14 @@ class ArenaDatabase {
         this.db.prepare('UPDATE runs SET room_count = ? WHERE id = ?').run(roomCount, runId);
     }
 
-    incrementLaunched(runId, matchupId) {
+    recordLaunch(runId, matchupIds) {
         this.transaction(() => {
-            this.db.prepare(
+            const incrementMatchup = this.db.prepare(
                 'UPDATE matchups SET launched_games = launched_games + 1 WHERE id = ?',
-            ).run(matchupId);
+            );
+            for (const matchupId of matchupIds) {
+                incrementMatchup.run(matchupId);
+            }
             this.db.prepare(
                 'UPDATE runs SET launched_games = launched_games + 1 WHERE id = ?',
             ).run(runId);
@@ -292,10 +295,24 @@ class ArenaDatabase {
         }
         run.matchups = matchupRows.map((matchup) => {
             const competitors = competitorsByMatchup.get(matchup.id) || [];
-            const observedGames = competitors.length === 2
-                ? Math.min(...competitors.map((item) => item.games))
-                : 0;
-            const decidedGames = competitors.reduce((sum, item) => sum + item.win, 0);
+            if (run.kind === 'challenge' && competitors.length > 1) {
+                const opponent = competitors[1];
+                competitors[0] = {
+                    ...competitors[0],
+                    flee: 0,
+                    games: opponent.games,
+                    lose: opponent.win,
+                    win: opponent.lose,
+                };
+            }
+            const observedGames = competitors.length === 1
+                ? competitors[0].games
+                : competitors.length > 1
+                    ? Math.min(...competitors.map((item) => item.games))
+                    : 0;
+            const decidedGames = competitors.length === 1
+                ? competitors[0].win + competitors[0].lose
+                : competitors.reduce((sum, item) => sum + item.win, 0);
             return {
                 aiLevel: matchup.ai_level,
                 competitors,
@@ -315,7 +332,10 @@ class ArenaDatabase {
             }
             return right.aiLevel - left.aiLevel || left.label.localeCompare(right.label);
         });
-        run.observedGames = run.matchups.reduce((sum, item) => sum + item.observedGames, 0);
+        const observedGames = run.matchups.reduce((sum, item) => sum + item.observedGames, 0);
+        run.observedGames = run.kind === 'ranking'
+            ? run.matchups.reduce((sum, item) => sum + (item.competitors[0]?.win || 0), 0)
+            : observedGames;
         run.events = this.db.prepare(`
             SELECT * FROM (
                 SELECT id, level, event_type, message, created_at
@@ -328,25 +348,29 @@ class ArenaDatabase {
             at: event.created_at,
             id: event.id,
             level: event.level,
-            message: event.message,
+            message: event.message.replaceAll('对局组', '卡组'),
             type: event.event_type,
         }));
         return run;
     }
 
-    listRuns(limit = 30) {
+    listRuns(limit = 30, offset = 0) {
         const rows = this.db.prepare(`
             SELECT runs.*, COUNT(matchups.id) AS matchup_count
             FROM runs
             LEFT JOIN matchups ON matchups.run_id = runs.id
             GROUP BY runs.id
             ORDER BY runs.created_at DESC
-            LIMIT ?
-        `).all(limit);
+            LIMIT ? OFFSET ?
+        `).all(limit, offset);
         return rows.map((row) => ({
             ...mapRunRow(row),
             matchupCount: row.matchup_count,
         }));
+    }
+
+    getRunCount() {
+        return Number(this.db.prepare('SELECT COUNT(*) AS count FROM runs').get().count);
     }
 
     findActiveRun() {
@@ -363,13 +387,28 @@ class ArenaDatabase {
     markActiveRunsInterrupted() {
         const placeholders = activeStatuses.map(() => '?').join(', ');
         const interruptedAt = now();
-        const result = this.db.prepare(`
-            UPDATE runs
-            SET status = 'interrupted', finished_at = ?,
-                stop_reason = 'Arena 服务进程已重新启动'
-            WHERE status IN (${placeholders})
-        `).run(interruptedAt, ...activeStatuses);
-        return Number(result.changes);
+        return this.transaction(() => {
+            const activeRuns = this.db.prepare(`
+                SELECT id FROM runs WHERE status IN (${placeholders})
+            `).all(...activeStatuses);
+            if (activeRuns.length === 0) {
+                return 0;
+            }
+            this.db.prepare(`
+                UPDATE runs
+                SET status = 'interrupted', finished_at = ?,
+                    stop_reason = 'Arena 服务进程已重新启动'
+                WHERE status IN (${placeholders})
+            `).run(interruptedAt, ...activeStatuses);
+            const insertEvent = this.db.prepare(`
+                INSERT INTO run_events (run_id, level, event_type, message, created_at)
+                VALUES (?, 'warning', 'interrupted', 'Arena 服务进程已重新启动，任务已中断', ?)
+            `);
+            for (const run of activeRuns) {
+                insertEvent.run(run.id, interruptedAt);
+            }
+            return activeRuns.length;
+        });
     }
 }
 
