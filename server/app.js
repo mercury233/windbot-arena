@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 
+const STATE_HEARTBEAT_MS = 5000;
+
 function createApp(config, database, arenaService, shutdownSignal) {
     const app = express();
     app.disable('x-powered-by');
@@ -112,25 +114,27 @@ function createApp(config, database, arenaService, shutdownSignal) {
             'X-Accel-Buffering': 'no',
         });
         response.flushHeaders();
-        response.write(`event: ready\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`);
+        const writeState = (event) => {
+            response.write(`event: ${event}\ndata: ${JSON.stringify({
+                at: new Date().toISOString(),
+                revisions: arenaService.getRevisions(),
+            })}\n\n`);
+        };
+        writeState('ready');
 
         if (shutdownSignal?.aborted) {
             response.end();
             return;
         }
 
-        const sendChange = (event) => {
-            response.write(`event: change\ndata: ${JSON.stringify(event)}\n\n`);
-        };
-        const keepAlive = setInterval(() => response.write(': keep-alive\n\n'), 20000);
+        const heartbeat = setInterval(() => writeState('heartbeat'), STATE_HEARTBEAT_MS);
         let closed = false;
         const cleanup = () => {
             if (closed) {
                 return;
             }
             closed = true;
-            clearInterval(keepAlive);
-            arenaService.off('change', sendChange);
+            clearInterval(heartbeat);
             shutdownSignal?.removeEventListener('abort', closeForShutdown);
         };
         const closeForShutdown = () => {
@@ -138,7 +142,6 @@ function createApp(config, database, arenaService, shutdownSignal) {
             response.end();
             response.destroy();
         };
-        arenaService.on('change', sendChange);
         shutdownSignal?.addEventListener('abort', closeForShutdown, { once: true });
         request.on('close', cleanup);
     });

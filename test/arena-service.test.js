@@ -209,6 +209,80 @@ test('deck listing keeps current decks available without an old WindBot', () => 
     });
 });
 
+test('system inspection omits server filesystem paths', () => {
+    const settings = createDefaultArenaSettings();
+    const service = new ArenaService({
+        databasePath: 'F:\\secrets\\arena.sqlite',
+        listenHost: '127.0.0.1',
+        listenPort: 3000,
+    }, {
+        getArenaSettings: () => ({ settings }),
+    });
+
+    const result = service.inspectSystem();
+    assert.equal('storage' in result, false);
+    assert.equal(JSON.stringify(result).includes('arena.sqlite'), false);
+});
+
+test('state revisions separate static, history and active-run changes', () => {
+    const service = new ArenaService({}, {});
+    assert.deepEqual(service.getRevisions(), { active: 0, runs: 0, system: 0 });
+
+    service.markChanged('settings');
+    service.markChanged('created');
+    service.markChanged('progress');
+    service.markChanged('rank');
+    service.markChanged('run-event');
+    service.markChanged('schedule-error');
+    service.markChanged('score-poll-error');
+
+    assert.deepEqual(service.getRevisions(), { active: 6, runs: 1, system: 1 });
+});
+
+test('startup events update the active-run revision while WindBot is still starting', async () => {
+    const eventTypes = [];
+    const database = {
+        addEvent(runId, level, eventType) {
+            eventTypes.push(eventType);
+        },
+        setRunStatus() {},
+    };
+    const service = new ArenaService({}, database);
+    const context = {
+        abortController: new AbortController(),
+        children: [],
+        finished: false,
+        id: 'startup-run',
+        kind: 'challenge',
+        settings: {
+            windbots: {
+                current: { host: 'current.lan', mode: 'remote', port: 2399 },
+            },
+        },
+    };
+    service.current = context;
+    service.rebootServer = async () => {};
+    service.pollScores = async () => {};
+    service.scheduleGames = async () => {};
+    let releaseWindBot;
+    let reachedWindBot;
+    const windBotReady = new Promise((resolve) => { releaseWindBot = resolve; });
+    const windBotWaiting = new Promise((resolve) => { reachedWindBot = resolve; });
+    service.waitForWindBot = async () => {
+        reachedWindBot();
+        await windBotReady;
+    };
+
+    const execution = service.execute(context);
+    await windBotWaiting;
+
+    assert.deepEqual(eventTypes, ['preparing', 'server-ready', 'remote-windbot']);
+    assert.deepEqual(service.getRevisions(), { active: 3, runs: 1, system: 0 });
+
+    releaseWindBot();
+    await execution;
+});
+
 test('run creation rejects incomplete settings before persisting a run', () => {
     const settings = createDefaultArenaSettings();
     Object.assign(settings.windbots.current, {
@@ -483,4 +557,5 @@ test('score polling continues after a transient query failure', async (context) 
     assert.equal(requestCount, 2);
     assert.deepEqual(received, [[]]);
     assert.equal(events[0][2], 'score-poll-error');
+    assert.deepEqual(service.getRevisions(), { active: 1, runs: 0, system: 0 });
 });

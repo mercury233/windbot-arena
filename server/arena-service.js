@@ -3,7 +3,6 @@
 const childProcess = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
-const { EventEmitter } = require('events');
 const {
     getPublicArenaSettings,
     validateAndMergeArenaSettings,
@@ -81,12 +80,16 @@ function sanitizeEnvironment() {
     return result;
 }
 
-class ArenaService extends EventEmitter {
+class ArenaService {
     constructor(runtimeConfig, database) {
-        super();
         this.runtimeConfig = runtimeConfig;
         this.database = database;
         this.current = null;
+        this.revisions = {
+            active: 0,
+            runs: 0,
+            system: 0,
+        };
         this.windbotOutputs = {
             current: { active: false, output: '', updatedAt: null },
             old: { active: false, output: '', updatedAt: null },
@@ -101,16 +104,11 @@ class ArenaService extends EventEmitter {
         const { settings } = this.database.getArenaSettings();
         const inspection = inspectConfiguration(settings);
         return {
-            activeRunId: this.current?.id || null,
             botConfigFingerprints: this.getBotConfigFingerprints(settings),
             configuration: inspection,
             endpoints: {
                 web: `http://${this.runtimeConfig.listenHost}:${this.runtimeConfig.listenPort}`,
             },
-            storage: {
-                database: this.runtimeConfig.databasePath,
-            },
-            latestRankAt: this.database.getLatestRankAt(),
             srvpro: {
                 duelPort: settings.srvpro.duelPort,
                 host: settings.srvpro.host,
@@ -140,6 +138,10 @@ class ArenaService extends EventEmitter {
     getSettings() {
         const record = this.database.getArenaSettings();
         return getPublicArenaSettings(record.settings, record.updatedAt);
+    }
+
+    getRevisions() {
+        return { ...this.revisions };
     }
 
     async listRooms() {
@@ -215,7 +217,7 @@ class ArenaService extends EventEmitter {
         }
         await this.fetchRemoteBotConfigs(settings);
         const saved = this.database.saveArenaSettings(settings);
-        this.emitChange(null, 'settings');
+        this.markChanged('settings');
         return getPublicArenaSettings(saved.settings, saved.updatedAt);
     }
 
@@ -280,7 +282,7 @@ class ArenaService extends EventEmitter {
             this.database.saveArenaSettings(settings);
         }
         const inspection = inspectConfiguration(settings);
-        this.emitChange(null, 'decks');
+        this.markChanged('decks');
         return {
             botConfigFingerprints: this.getBotConfigFingerprints(settings),
             configuration: inspection,
@@ -391,7 +393,7 @@ class ArenaService extends EventEmitter {
             totalGames: kind === 'regression' ? matchups.length * gamesPerMatchup : 0,
         };
         this.current = context;
-        this.emitChange(id, 'created');
+        this.markChanged('created');
         context.done = this.execute(context);
         return stored;
     }
@@ -407,9 +409,10 @@ class ArenaService extends EventEmitter {
                 startedAt: new Date().toISOString(),
             });
             this.database.addEvent(context.id, 'info', 'preparing', '正在重启 SRVPro 并清理旧对局');
-            this.emitChange(context.id, 'preparing');
+            this.markChanged('preparing');
             await this.rebootServer(context);
             this.database.addEvent(context.id, 'info', 'server-ready', 'SRVPro 已重启并恢复服务');
+            this.markChanged('run-event');
 
             const instances = [['current', '新版', context.settings.windbots.current]];
             if (context.kind === 'regression') {
@@ -427,6 +430,7 @@ class ArenaService extends EventEmitter {
                         'remote-windbot',
                         `${label}使用远程 WindBot ${endpointHost}:${instance.port}`,
                     );
+                    this.markChanged('run-event');
                 }
                 return this.waitForWindBot(label, endpointHost, instance.port, child, signal);
             });
@@ -439,7 +443,7 @@ class ArenaService extends EventEmitter {
                 'running',
                 `${context.kind === 'regression' ? '两套' : '新版'} WindBot 已就绪，开始创建对局`,
             );
-            this.emitChange(context.id, 'running');
+            this.markChanged('running');
             context.scorePoller = this.pollScores(context);
             await this.scheduleGames(context);
 
@@ -448,7 +452,7 @@ class ArenaService extends EventEmitter {
             }
             this.database.setRunStatus(context.id, 'settling');
             this.database.addEvent(context.id, 'info', 'settling', '对局已全部创建，正在等待排行统计');
-            this.emitChange(context.id, 'settling');
+            this.markChanged('settling');
             const fullyObserved = await this.waitForResults(context);
             if (!fullyObserved) {
                 this.database.addEvent(context.id, 'warning', 'settle-timeout', '等待排行统计超时，已保留现有结果');
@@ -593,6 +597,7 @@ class ArenaService extends EventEmitter {
                     'score-poll-error',
                     `查询 SRVPro 排行失败: ${error.message}`,
                 );
+                this.markChanged('score-poll-error');
             }
             try {
                 await sleep(intervalMs, signal);
@@ -778,7 +783,7 @@ class ArenaService extends EventEmitter {
                         entries.forEach((entry) => { entry.launchedGames++; });
                         launchedGames++;
                         this.database.recordLaunch(context.id, entries.map((entry) => entry.id));
-                        this.emitChange(context.id, 'progress');
+                        this.markChanged('progress');
                         continue;
                     }
 
@@ -802,7 +807,7 @@ class ArenaService extends EventEmitter {
                     launchedGames++;
                     context.nextMatchupIndex = (matchupIndex + 1) % context.matchups.length;
                     this.database.recordLaunch(context.id, [matchup.id]);
-                    this.emitChange(context.id, 'progress');
+                    this.markChanged('progress');
                 }
                 consecutiveErrors = 0;
             } catch (error) {
@@ -811,6 +816,7 @@ class ArenaService extends EventEmitter {
                 }
                 consecutiveErrors++;
                 this.database.addEvent(context.id, 'warning', 'schedule-error', error.message);
+                this.markChanged('schedule-error');
                 if (consecutiveErrors >= 10) {
                     throw new Error('连续 10 次无法查询房间或创建 bot，已停止调度');
                 }
@@ -839,7 +845,7 @@ class ArenaService extends EventEmitter {
         const context = this.current;
         const receivedAt = this.database.recordRank(context?.id || null, normalized, rank);
         if (!context) {
-            this.emitChange(null, 'rank');
+            this.markChanged('rank');
             return { matchedRunId: null, receivedAt };
         }
 
@@ -850,7 +856,7 @@ class ArenaService extends EventEmitter {
             );
             context.latestObserved.set(matchup.id, Math.min(...observed));
         }
-        this.emitChange(context.id, 'rank');
+        this.markChanged('rank');
         return { matchedRunId: context.id, receivedAt };
     }
 
@@ -864,7 +870,7 @@ class ArenaService extends EventEmitter {
             this.database.setRunStatus(runId, 'stopping');
             this.database.addEvent(runId, 'warning', 'stopping', reason);
             context.abortController.abort(new DOMException(reason, 'AbortError'));
-            this.emitChange(runId, 'stopping');
+            this.markChanged('stopping');
         }
         return this.database.getRun(runId);
     }
@@ -897,11 +903,24 @@ class ArenaService extends EventEmitter {
         if (this.current === context) {
             this.current = null;
         }
-        this.emitChange(context.id, status);
+        this.markChanged(status);
     }
 
-    emitChange(runId, reason) {
-        this.emit('change', { reason, runId });
+    markChanged(reason) {
+        if (reason === 'settings' || reason === 'decks') {
+            this.revisions.system++;
+            return;
+        }
+        this.revisions.active++;
+        if (
+            reason !== 'progress'
+            && reason !== 'rank'
+            && reason !== 'run-event'
+            && reason !== 'schedule-error'
+            && reason !== 'score-poll-error'
+        ) {
+            this.revisions.runs++;
+        }
     }
 
     async shutdown() {

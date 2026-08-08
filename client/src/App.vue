@@ -66,13 +66,13 @@ const inspectorOutput = ref(null);
 const clockNow = ref(Date.now());
 let eventSource;
 let clockTimer;
-let pollingTimer;
-let refreshTimer;
 let inspectorTimer;
 let refreshing;
-let refreshQueued = false;
+let revisionIndexes;
+const pendingRefreshDomains = new Set();
 let recentDecksValidated = false;
 const historyPageSize = 10;
+const allRefreshDomains = ['system', 'runs', 'active'];
 
 const terminalStatuses = new Set(['completed', 'stopped', 'failed', 'interrupted']);
 const statusLabels = {
@@ -305,44 +305,78 @@ async function api(path, options) {
     return body;
 }
 
-async function refresh() {
+async function refresh(domains = allRefreshDomains) {
+    domains.forEach((domain) => pendingRefreshDomains.add(domain));
     if (refreshing) {
-        refreshQueued = true;
         return refreshing;
     }
     refreshing = (async () => {
-        const [systemBody, runsBody, activeBody] = await Promise.all([
-            api('/api/system'),
-            api(`/api/runs?limit=${historyPageSize}&offset=${(historyPage.value - 1) * historyPageSize}`),
-            api('/api/runs/active'),
-        ]);
-        system.value = systemBody;
-        runs.value = runsBody.runs;
-        historyTotal.value = runsBody.total;
-        activeRun.value = activeBody.run;
-        if (activeBody.run) {
-            experimentKind.value = activeBody.run.kind;
-            selectedRun.value = activeBody.run;
-        } else if (selectedRun.value) {
-            const latest = await api(`/api/runs/${selectedRun.value.id}`).catch(() => null);
-            selectedRun.value = latest?.run || null;
-        } else if (runs.value.length > 0) {
-            selectedRun.value = (await api(`/api/runs/${runs.value[0].id}`)).run;
+        while (pendingRefreshDomains.size > 0) {
+            const requested = [...pendingRefreshDomains];
+            pendingRefreshDomains.clear();
+            const responses = Object.fromEntries(await Promise.all(requested.map(async (domain) => {
+                if (domain === 'system') {
+                    return [domain, await api('/api/system')];
+                }
+                if (domain === 'runs') {
+                    return [domain, await api(
+                        `/api/runs?limit=${historyPageSize}&offset=${(historyPage.value - 1) * historyPageSize}`,
+                    )];
+                }
+                return [domain, await api('/api/runs/active')];
+            })));
+            if (responses.system) {
+                system.value = responses.system;
+            }
+            if (responses.runs) {
+                runs.value = responses.runs.runs;
+                historyTotal.value = responses.runs.total;
+            }
+            if (responses.active) {
+                const previousActiveId = activeRun.value?.id;
+                activeRun.value = responses.active.run;
+                if (responses.active.run) {
+                    experimentKind.value = responses.active.run.kind;
+                    selectedRun.value = responses.active.run;
+                } else if (previousActiveId) {
+                    const latest = await api(`/api/runs/${previousActiveId}`).catch(() => null);
+                    selectedRun.value = latest?.run || null;
+                }
+            }
+            if (!activeRun.value && !selectedRun.value && runs.value.length > 0) {
+                selectedRun.value = (await api(`/api/runs/${runs.value[0].id}`)).run;
+            }
         }
     })().finally(() => {
         refreshing = null;
         loading.value = false;
-        if (refreshQueued) {
-            refreshQueued = false;
-            scheduleRefresh();
-        }
     });
     return refreshing;
 }
 
-function scheduleRefresh() {
-    clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => refresh().catch((error) => message.error(error.message)), 150);
+function handleRevisionEvent(event) {
+    let next;
+    try {
+        next = JSON.parse(event.data).revisions;
+    } catch {
+        return;
+    }
+    if (!next || !allRefreshDomains.every((domain) => Number.isInteger(next[domain]))) {
+        return;
+    }
+    liveConnected.value = true;
+    const changedDomains = revisionIndexes && system.value
+        ? allRefreshDomains.filter((domain) => next[domain] !== revisionIndexes[domain])
+        : allRefreshDomains;
+    if (changedDomains.length === 0) {
+        return;
+    }
+    refresh(changedDomains).then(() => {
+        revisionIndexes ||= {};
+        changedDomains.forEach((domain) => {
+            revisionIndexes[domain] = next[domain];
+        });
+    }).catch((error) => message.error(error.message));
 }
 
 async function selectRun(runId) {
@@ -368,7 +402,7 @@ async function selectRun(runId) {
 
 function selectHistoryPage(page) {
     historyPage.value = page;
-    refresh().catch((error) => message.error(error.message));
+    refresh(['runs']).catch((error) => message.error(error.message));
 }
 
 async function openSettings() {
@@ -448,7 +482,7 @@ async function saveSettings(settings) {
         });
         settingsOpen.value = false;
         message.success('系统配置已保存');
-        await refresh();
+        await refresh(['system']);
     } catch (error) {
         message.error(error.message);
     } finally {
@@ -467,7 +501,7 @@ async function refreshBotConfigs() {
         message.success(`bot.conf 已刷新，内容${
             result.contentChanged || fingerprintChanged || catalogChanged ? '有变化' : '无变化'
         }`);
-        await refresh();
+        await refresh(['system']);
     } catch (error) {
         message.error(error.message);
     } finally {
@@ -507,7 +541,7 @@ async function startRun() {
         selectedRun.value = body.run;
         historyPage.value = 1;
         message.success(`${runKindLabels[experimentKind.value]}已创建`);
-        await refresh();
+        await refresh(['runs', 'active']);
     } catch (error) {
         message.error(error.message);
     } finally {
@@ -523,7 +557,7 @@ async function stopRun() {
     try {
         await api(`/api/runs/${activeRun.value.id}/stop`, { method: 'POST' });
         message.info('正在安全停止测试');
-        await refresh();
+        await refresh(['runs', 'active']);
     } catch (error) {
         message.error(error.message);
     } finally {
@@ -714,12 +748,6 @@ function handleAiLevelSelection(aiLevel, checked) {
         .map((option) => option.value);
 }
 
-function refreshWhenVisible() {
-    if (document.visibilityState === 'visible') {
-        scheduleRefresh();
-    }
-}
-
 watch(activeRun, (run, previous) => {
     if (run && !previous) {
         deckListExpanded.value = false;
@@ -744,35 +772,25 @@ watch(experimentKind, () => {
 });
 
 onMounted(async () => {
+    eventSource = new EventSource('/api/events');
+    eventSource.addEventListener('ready', handleRevisionEvent);
+    eventSource.addEventListener('heartbeat', handleRevisionEvent);
+    eventSource.onerror = () => {
+        liveConnected.value = false;
+    };
     try {
         await refresh();
     } catch (error) {
         message.error(error.message);
         loading.value = false;
     }
-    eventSource = new EventSource('/api/events');
-    eventSource.addEventListener('ready', () => {
-        liveConnected.value = true;
-        scheduleRefresh();
-    });
-    eventSource.addEventListener('change', scheduleRefresh);
-    eventSource.onerror = () => {
-        liveConnected.value = false;
-    };
-    document.addEventListener('visibilitychange', refreshWhenVisible);
-    window.addEventListener('focus', scheduleRefresh);
     clockTimer = setInterval(() => { clockNow.value = Date.now(); }, 1000);
-    pollingTimer = setInterval(scheduleRefresh, 5000);
 });
 
 onBeforeUnmount(() => {
     clearInterval(clockTimer);
-    clearInterval(pollingTimer);
-    clearTimeout(refreshTimer);
     clearInterval(inspectorTimer);
     eventSource?.close();
-    document.removeEventListener('visibilitychange', refreshWhenVisible);
-    window.removeEventListener('focus', scheduleRefresh);
 });
 </script>
 
@@ -1280,7 +1298,7 @@ onBeforeUnmount(() => {
         <footer>
             <span>WINDBOT ARENA / SELF-HOSTED CONTROL PLANE</span>
             <div class="footer-status">
-                <span>最近收到数据：{{ formatDate(system?.latestRankAt, true) }}</span>
+                <span>最近收到数据：{{ formatDate(displayedRun?.latestRankAt, true) }}</span>
                 <div class="live-state" :class="{ connected: liveConnected }" role="status">
                     <span class="live-dot"></span>
                     {{ liveConnected ? '实时数据已连接' : '正在重新连接' }}

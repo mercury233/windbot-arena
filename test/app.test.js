@@ -93,10 +93,8 @@ test('settings, room, WindBot and run APIs return service data', async (context)
 
 test('shutdown signal closes SSE connections so the HTTP server can stop', async () => {
     const shutdownController = new AbortController();
-    const listeners = new Set();
     const service = {
-        off: (event, listener) => listeners.delete(listener),
-        on: (event, listener) => listeners.add(listener),
+        getRevisions: () => ({ active: 3, runs: 2, system: 1 }),
     };
     const app = createApp(
         { rootDir: path.resolve(__dirname, '..') },
@@ -109,7 +107,9 @@ test('shutdown signal closes SSE connections so the HTTP server can stop', async
     const address = server.address();
     const eventsResponse = await fetch(`http://127.0.0.1:${address.port}/api/events`);
     assert.equal(eventsResponse.status, 200);
-    assert.equal(listeners.size, 1);
+    const firstEvent = new TextDecoder().decode((await eventsResponse.body.getReader().read()).value);
+    assert.match(firstEvent, /event: ready/);
+    assert.match(firstEvent, /"revisions":\{"active":3,"runs":2,"system":1\}/);
 
     const serverClosed = new Promise((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -117,5 +117,4 @@ test('shutdown signal closes SSE connections so the HTTP server can stop', async
     shutdownController.abort();
     await serverClosed;
 
-    assert.equal(listeners.size, 0);
 });

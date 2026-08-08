@@ -4,7 +4,7 @@ WindBot Arena 是一个自托管的 Node.js 对战实验控制台。它通过网
 
 ## 技术结构
 
-- `client/`：Vue 3 + Naive UI 前端，通过同源 JSON API 和 Server-Sent Events 与服务端通信。
+- `client/`：Vue 3 + Naive UI 前端，通过同源 JSON API 和 Server-Sent Events 与服务端通信；SSE 心跳只传递分域版本索引，前端按变化获取 `system`、运行列表或活动任务。
 - `server/app.js`：网站、API 和实时事件入口。
 - `server/arena-service.js`：SRVPro 重启、WindBot 生命周期、房间调度及结果等待。
 - `server/arena-settings.js`：存储在 SQLite 中的业务配置模型、校验和敏感字段脱敏。
