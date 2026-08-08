@@ -14,7 +14,10 @@
       "merge_logs": true,
       "log_date_format": "YYYY-MM-DD HH:mm:ss Z",
       "env": {
-        "NODE_ENV": "production"
+        "NODE_ENV": "production",
+        "WINDBOT_ARENA_HOST": "0.0.0.0",
+        "WINDBOT_ARENA_PORT": "3000",
+        "WINDBOT_ARENA_DATABASE": "data/arena.sqlite"
       }
     }
   ]
