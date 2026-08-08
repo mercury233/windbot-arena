@@ -82,11 +82,13 @@ Arena 无法直接读取远端文件系统。可以把 `bot.conf` 粘贴到网�
 
 新版和旧版可以分别选择本地或远程模式，但不能指向同一个 HTTP 端点。
 
-## Match 模式
+## 约战模式
 
-Arena 固定向 WindBot 发送 `password=M`。这是 SRVPro 随机对战 Match 模式的协议值，用于让服务端统计胜率，不是可配置的房间密码。
+Arena 为每组 Bot 生成一个 `M#123456789` 形式的唯一房名，并向双方 WindBot 发送相同的 `password`。SRVPro 会让房名相同的双方进入同一房间，并把这些普通约战房间的结果计入独立的 `private_duel` 排行。下一组使用新的房名，因此不会与其他正在创建或等待中的对局混合；任一 WindBot 启动请求失败或超时时，Arena 会通过 SRVPro 管理 API 关闭该组房间。
 
-当前胜负结果仍以 SRVPro 定时发送的排行为准。将来若改用专用 SRVPro 或直接从 WindBot 收集结果，应作为新的结果来源设计，而不是把 `M` 暴露为普通配置。
+约战房名由 Arena 自动生成，不属于用户配置。当前胜负结果仍以 SRVPro 定时发送的累计排行为准。
+
+SRVPro 的生产配置需要启用 `modules.private_duel.record_match_scores`，把 `post_match_scores` 和 `post_match_accesskey` 指向 Arena，并确保 `post_match_scores_limit` 不小于 Arena 中配置的“排行榜名称上限”。Arena 使用的 SRVPro 管理账号还需要 `kick_user` 权限，以便启动请求失败时关闭约战房间。需注意 SRVPro 默认配置中的约战统计和回报均为关闭状态。
 
 界面中的“新版胜率”按 `新版胜场 /（新版胜场 + 旧版胜场）` 计算。正常完成的对局中它与新版自身的胜负统计一致；逃跑作为异常计数单独展示，不再提供含义高度重叠的第二个胜率指标。“已统计对局”只按 `win + lose` 计算，`flee` 不会额外增加完成局数。
 

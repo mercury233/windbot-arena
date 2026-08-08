@@ -17,8 +17,9 @@ const {
 } = require('./bot-config');
 const { normalizeRank } = require('./stats');
 
-// “M”是 SRVPro 进入随机对战统计模式的协议值，不是房间密码或用户配置。
-const MATCH_MODE_PASSWORD = 'M';
+// 单独的 M 会进入随机队列；M#… 会创建可统计的普通 Match 房间，且需放入 WindBot 的 20 字符房名字段。
+const PRIVATE_DUEL_ROOM_MIN = 100000000;
+const PRIVATE_DUEL_ROOM_MAX = 999999999;
 const MAX_WINDBOT_OUTPUT_LENGTH = 2000000;
 
 function requestError(message, statusCode = 400) {
@@ -385,6 +386,10 @@ class ArenaService extends EventEmitter {
                 launchedGames: 0,
             })),
             nextMatchupIndex: 0,
+            nextPrivateRoomNumber: crypto.randomInt(
+                PRIVATE_DUEL_ROOM_MIN,
+                PRIVATE_DUEL_ROOM_MAX + 1,
+            ),
             settings,
             stopReason: null,
             totalGames: kind === 'regression' ? matchups.length * gamesPerMatchup : 0,
@@ -601,13 +606,22 @@ class ArenaService extends EventEmitter {
         throw new Error('服务端在重启后 120 秒内没有恢复');
     }
 
-    async addBot(context, competitor) {
+    nextPrivateDuelPassword(context) {
+        const roomNumber = context.nextPrivateRoomNumber
+            ?? crypto.randomInt(PRIVATE_DUEL_ROOM_MIN, PRIVATE_DUEL_ROOM_MAX + 1);
+        context.nextPrivateRoomNumber = roomNumber === PRIVATE_DUEL_ROOM_MAX
+            ? PRIVATE_DUEL_ROOM_MIN
+            : roomNumber + 1;
+        return `M#${roomNumber}`;
+    }
+
+    async addBot(context, competitor, password) {
         const srvpro = context.settings.srvpro;
         const url = makeHttpUrl(competitor.endpointHost, competitor.endpointPort);
         url.searchParams.set('name', competitor.rankName);
         url.searchParams.set('host', srvpro.host);
         url.searchParams.set('port', String(srvpro.duelPort));
-        url.searchParams.set('password', MATCH_MODE_PASSWORD);
+        url.searchParams.set('password', password);
         url.searchParams.set('deck', competitor.deck);
         url.searchParams.set('chat', 'false');
         if (competitor.dialog) {
@@ -619,35 +633,62 @@ class ArenaService extends EventEmitter {
         }
     }
 
-    async launchMatchup(context, matchup) {
-        const scheduler = context.settings.scheduler;
-        const players = matchup.launchedGames % 2 === 0
-            ? matchup.competitors
-            : [...matchup.competitors].reverse();
-        await this.addBot(context, players[0]);
-        if (scheduler.pairDelayMs > 0) {
-            await sleep(scheduler.pairDelayMs, context.abortController.signal);
+    async closePrivateDuelRoom(context, password) {
+        const srvpro = context.settings.srvpro;
+        const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/message');
+        url.searchParams.set('username', srvpro.username);
+        url.searchParams.set('pass', srvpro.password);
+        url.searchParams.set('kick', password);
+        const response = await fetchWithTimeout(url, 5000);
+        const body = await response.text();
+        if (!response.ok || body.includes('密码错误')) {
+            throw new Error(`SRVPro 拒绝关闭房间: HTTP ${response.status} ${body}`);
         }
-        await this.addBot(context, players[1]);
-        if (scheduler.pairDelayMs > 0) {
-            await sleep(scheduler.pairDelayMs, context.abortController.signal);
+        if (!body.includes('kick ok') && !body.includes('room not found')) {
+            throw new Error(`无法确认 SRVPro 已关闭房间: ${body}`);
         }
     }
 
-    async launchRankingPair(context, entries) {
+    async launchPair(context, players) {
         const scheduler = context.settings.scheduler;
+        const password = this.nextPrivateDuelPassword(context);
+        try {
+            await this.addBot(context, players[0], password);
+            if (scheduler.pairDelayMs > 0) {
+                await sleep(scheduler.pairDelayMs, context.abortController.signal);
+            }
+            await this.addBot(context, players[1], password);
+            if (scheduler.pairDelayMs > 0) {
+                await sleep(scheduler.pairDelayMs, context.abortController.signal);
+            }
+        } catch (error) {
+            try {
+                await this.closePrivateDuelRoom(context, password);
+            } catch (cleanupError) {
+                if (!isAbortError(error)) {
+                    throw new Error(
+                        `${error.message}；关闭约战房间失败: ${cleanupError.message}`,
+                        { cause: error },
+                    );
+                }
+            }
+            throw error;
+        }
+    }
+
+    async launchMatchup(context, matchup) {
+        const players = matchup.launchedGames % 2 === 0
+            ? matchup.competitors
+            : [...matchup.competitors].reverse();
+        await this.launchPair(context, players);
+    }
+
+    async launchRankingPair(context, entries) {
         const players = entries.map((entry) => entry.competitors[0]);
         if (Math.random() < 0.5) {
             players.reverse();
         }
-        await this.addBot(context, players[0]);
-        if (scheduler.pairDelayMs > 0) {
-            await sleep(scheduler.pairDelayMs, context.abortController.signal);
-        }
-        await this.addBot(context, players[1]);
-        if (scheduler.pairDelayMs > 0) {
-            await sleep(scheduler.pairDelayMs, context.abortController.signal);
-        }
+        await this.launchPair(context, players);
     }
 
     async scheduleGames(context) {

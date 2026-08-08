@@ -79,6 +79,116 @@ test('challenge scheduler rotates through every opponent until stopped', async (
     assert.deepEqual(context.matchups.map((entry) => entry.launchedGames), [2, 2, 2]);
 });
 
+test('pair launches use one private duel password per pair and never reuse it', async (context) => {
+    const service = new ArenaService({}, {});
+    const activeContext = {
+        abortController: new AbortController(),
+        nextPrivateRoomNumber: 123456789,
+        settings: {
+            scheduler: { pairDelayMs: 0 },
+            srvpro: { duelPort: 7911, host: 'srvpro.lan' },
+        },
+    };
+    const competitor = (name, port) => ({
+        deck: `${name}-deck`,
+        dialog: null,
+        endpointHost: `${name}.lan`,
+        endpointPort: port,
+        rankName: name,
+    });
+    const matchup = {
+        competitors: [competitor('current', 2399), competitor('old', 2400)],
+        launchedGames: 0,
+    };
+    const rankingEntries = [
+        { competitors: [competitor('alpha', 2399)] },
+        { competitors: [competitor('beta', 2399)] },
+    ];
+    const requests = [];
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async (url) => {
+        requests.push(new URL(url));
+        return new Response(null, { status: 200 });
+    };
+
+    await service.launchMatchup(activeContext, matchup);
+    await service.launchMatchup(activeContext, matchup);
+    await service.launchRankingPair(activeContext, rankingEntries);
+
+    const passwords = requests.map((url) => url.searchParams.get('password'));
+    assert.deepEqual(passwords, [
+        'M#123456789',
+        'M#123456789',
+        'M#123456790',
+        'M#123456790',
+        'M#123456791',
+        'M#123456791',
+    ]);
+    assert.ok(requests.every((url) => url.searchParams.get('host') === 'srvpro.lan'));
+    assert.ok(requests.every((url) => url.searchParams.get('port') === '7911'));
+});
+
+test('pair launch closes its private room when a WindBot request fails', async (context) => {
+    const service = new ArenaService({}, {});
+    const activeContext = {
+        abortController: new AbortController(),
+        nextPrivateRoomNumber: 123456789,
+        settings: {
+            scheduler: { pairDelayMs: 0 },
+            srvpro: {
+                duelPort: 7911,
+                host: 'srvpro.lan',
+                password: 'management-secret',
+                statusPort: 7922,
+                username: 'arena',
+            },
+        },
+    };
+    const matchup = {
+        competitors: [
+            {
+                deck: 'current-deck',
+                dialog: null,
+                endpointHost: 'current.lan',
+                endpointPort: 2399,
+                rankName: 'current',
+            },
+            {
+                deck: 'old-deck',
+                dialog: null,
+                endpointHost: 'old.lan',
+                endpointPort: 2400,
+                rankName: 'old',
+            },
+        ],
+        launchedGames: 0,
+    };
+    const requests = [];
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async (url) => {
+        const requestUrl = new URL(url);
+        requests.push(requestUrl);
+        if (requestUrl.hostname === 'old.lan') {
+            throw new DOMException('WindBot 请求超时', 'TimeoutError');
+        }
+        if (requestUrl.pathname === '/api/message') {
+            return new Response("['kick ok', 'M#123456789']");
+        }
+        return new Response(null, { status: 200 });
+    };
+
+    await assert.rejects(service.launchMatchup(activeContext, matchup), /WindBot 请求超时/);
+    const cleanupUrl = requests.at(-1);
+    assert.equal(cleanupUrl.hostname, 'srvpro.lan');
+    assert.equal(cleanupUrl.port, '7922');
+    assert.equal(cleanupUrl.pathname, '/api/message');
+    assert.equal(cleanupUrl.searchParams.get('username'), 'arena');
+    assert.equal(cleanupUrl.searchParams.get('pass'), 'management-secret');
+    assert.equal(cleanupUrl.searchParams.get('kick'), 'M#123456789');
+});
+
 test('deck listing keeps current decks available without an old WindBot', () => {
     const settings = createDefaultArenaSettings();
     Object.assign(settings.windbots.current, {
