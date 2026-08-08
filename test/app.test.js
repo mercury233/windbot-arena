@@ -41,6 +41,7 @@ test('settings API saves configuration and the configured rank endpoint checks t
     let receivedRank;
     let refreshedDecks = false;
     let requestedRunPage;
+    let forwardedRankCount = 0;
     const publicRecord = {
         secretStatus: { accessKeyConfigured: true, passwordConfigured: true },
         settings: { srvpro: { accessKey: '', password: '' } },
@@ -52,6 +53,7 @@ test('settings API saves configuration and the configured rank endpoint checks t
         getSettings: () => publicRecord,
         getWindBotOutput: (name) => ({ available: true, name, output: 'ready' }),
         listRooms: () => ({ rooms: [{ id: '123', name: 'M,RANDOM#123' }] }),
+        forwardRankReport: () => { forwardedRankCount++; },
         receiveRank: (rank) => { receivedRank = rank; },
         refreshBotConfigs: () => {
             refreshedDecks = true;
@@ -117,6 +119,15 @@ test('settings API saves configuration and the configured rank endpoint checks t
     });
     assert.equal(accepted.status, 200);
     assert.deepEqual(receivedRank, rank);
+    assert.equal(forwardedRankCount, 1);
+
+    const forwarded = await fetch(`${baseUrl}/score/report`, {
+        body: new URLSearchParams({ accesskey: 'rank-secret', rank: JSON.stringify(rank) }),
+        headers: { 'X-WindBot-Arena-Forwarded': '1' },
+        method: 'POST',
+    });
+    assert.equal(forwarded.status, 200);
+    assert.equal(forwardedRankCount, 1);
 
     const unconfiguredPath = await fetch(`${baseUrl}/`, {
         body: new URLSearchParams({ accesskey: 'rank-secret', rank: JSON.stringify(rank) }),

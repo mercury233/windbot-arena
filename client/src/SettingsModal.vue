@@ -11,6 +11,7 @@ import {
     NModal,
     NRadioButton,
     NRadioGroup,
+    NSwitch,
     NTabPane,
     NTabs,
 } from 'naive-ui';
@@ -35,6 +36,10 @@ function cloneSettings(value) {
 watch(() => [props.show, props.record], () => {
     if (props.show && props.record) {
         draft.value = cloneSettings(props.record.settings);
+        draft.value.development ||= {
+            rankForwardEnabled: false,
+            rankForwardUrl: '',
+        };
     }
 }, { immediate: true });
 
@@ -61,14 +66,10 @@ function save() {
             role="dialog"
             aria-modal="true"
         >
-            <template #header-extra>
-                <span class="settings-time">保存在 SQLite · {{ record.updatedAt ? '已有配置' : '尚未配置' }}</span>
-            </template>
-
             <n-tabs type="line" animated>
                 <n-tab-pane name="srvpro" tab="SRVPro">
                     <n-alert type="info" :bordered="false">
-                        该 SRVPro 仅供 Arena 使用。每次测试都会主动重启它并清理现有房间。
+                        该 SRVPro 应仅供 Arena 使用。每次测试都会主动重启它并清理现有房间。
                     </n-alert>
                     <n-form label-placement="top" class="settings-form">
                         <div class="settings-grid">
@@ -200,6 +201,32 @@ function save() {
                         </div>
                     </n-form>
                 </n-tab-pane>
+
+                <n-tab-pane name="development" tab="开发">
+                    <n-alert type="warning" :bordered="false">
+                        此功能仅用于开发调试。如果本 Arena 运行在与开发机不同的机器，收到 SRVPro 排行时可转发到开发机。
+                    </n-alert>
+                    <n-form label-placement="top" class="settings-form">
+                        <div class="settings-grid">
+                            <n-form-item label="转发 SRVPro 排行 POST">
+                                <n-switch v-model:value="draft.development.rankForwardEnabled">
+                                    <template #checked>已开启</template>
+                                    <template #unchecked>已关闭</template>
+                                </n-switch>
+                            </n-form-item>
+                            <n-form-item label="开发机排行接收 URL" class="span-2">
+                                <n-input
+                                    v-model:value="draft.development.rankForwardUrl"
+                                    :disabled="!draft.development.rankForwardEnabled"
+                                    placeholder="例如 http://192.168.1.20:3000/srvpro/score"
+                                />
+                            </n-form-item>
+                        </div>
+                    </n-form>
+                    <n-alert type="info" :bordered="false">
+                        转发使用当前生产 Arena 的排行接收密钥，开发机 Arena 需配置相同密钥。Arena 转发的请求不会被再次转发。
+                    </n-alert>
+                </n-tab-pane>
             </n-tabs>
 
             <n-alert v-if="disabled" type="warning" :bordered="false">
@@ -221,12 +248,6 @@ function save() {
     width: min(920px, calc(100vw - 32px));
     max-height: calc(100vh - 48px);
     overflow-y: auto;
-}
-
-.settings-time {
-    color: #607780;
-    font-family: 'DM Mono', monospace;
-    font-size: 10px;
 }
 
 .settings-form,

@@ -50,12 +50,12 @@ function sleep(milliseconds, signal) {
     });
 }
 
-async function fetchWithTimeout(url, timeoutMs, signal) {
+async function fetchWithTimeout(url, timeoutMs, signal, options) {
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const combinedSignal = signal
         ? AbortSignal.any([signal, timeoutSignal])
         : timeoutSignal;
-    return fetch(url, { signal: combinedSignal });
+    return fetch(url, { ...options, signal: combinedSignal });
 }
 
 function makeHttpUrl(host, port, pathname = '/') {
@@ -338,6 +338,10 @@ class ArenaService extends EventEmitter {
         }
 
         const { settings } = this.database.getArenaSettings();
+        const modeConfiguration = inspectConfiguration(settings).modes[kind];
+        if (!modeConfiguration.valid) {
+            throw requestError(`系统配置未完成：${modeConfiguration.issues.join('；')}`);
+        }
         let matchups;
         let normalizedTargetDeck = null;
         try {
@@ -794,6 +798,35 @@ class ArenaService extends EventEmitter {
         }
         this.emitChange(context.id, 'rank');
         return { matchedRunId: context.id, receivedAt };
+    }
+
+    async forwardRankReport(rank) {
+        const { settings } = this.database.getArenaSettings();
+        const forwarding = settings.development;
+        if (!forwarding?.rankForwardEnabled) {
+            return { forwarded: false };
+        }
+        const response = await fetchWithTimeout(
+            forwarding.rankForwardUrl,
+            10000,
+            undefined,
+            {
+                body: new URLSearchParams({
+                    accesskey: settings.srvpro.accessKey,
+                    rank: JSON.stringify(rank),
+                }),
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-WindBot-Arena-Forwarded': '1',
+                },
+                method: 'POST',
+                redirect: 'error',
+            },
+        );
+        if (!response.ok) {
+            throw new Error(`开发机 Arena 返回 HTTP ${response.status}`);
+        }
+        return { forwarded: true };
     }
 
     stopRun(runId, reason = '用户从 Web 界面停止了测试') {

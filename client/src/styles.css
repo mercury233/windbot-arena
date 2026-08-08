@@ -1064,7 +1064,6 @@ html[data-theme='light'] body .instance-heading h3 {
 [data-theme='light'] .history-main small,
 [data-theme='light'] .future-panel p,
 [data-theme='light'] .event-list time,
-html[data-theme='light'] body .settings-time,
 [data-theme='light'] footer {
     color: #4f6870;
 }

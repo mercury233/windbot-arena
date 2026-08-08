@@ -299,6 +299,7 @@ function inspectConfiguration(settings) {
         ['SRVPro 地址', srvpro.host],
         ['SRVPro 管理账号', srvpro.username],
         ['SRVPro 管理密码', srvpro.password],
+        ['排行接收路径', srvpro.rankPostPath],
         ['排行接收密钥', srvpro.accessKey],
     ]) {
         if (typeof value !== 'string' || value.trim() === '') {
@@ -309,13 +310,18 @@ function inspectConfiguration(settings) {
     const inspectInstance = (label, instance) => {
         const issues = [];
         if (instance.mode === 'local') {
-            for (const [targetLabel, targetPath] of [
-                [`${label} bot.conf`, instance.botConfPath],
-                [`${label} WindBot.exe`, path.join(instance.runtimeDir, 'WindBot.exe')],
-            ]) {
-                if (!targetPath || !fs.existsSync(targetPath)) {
-                    issues.push(`${targetLabel} 不存在: ${targetPath || '未配置'}`);
+            if (!instance.runtimeDir) {
+                issues.push(`${label} WindBot 运行目录未配置`);
+            } else {
+                const executablePath = path.join(instance.runtimeDir, 'WindBot.exe');
+                if (!fs.existsSync(executablePath)) {
+                    issues.push(`${label} WindBot.exe 不存在: ${executablePath}`);
                 }
+            }
+            if (!instance.botConfPath) {
+                issues.push(`${label} bot.conf 路径未配置`);
+            } else if (!fs.existsSync(instance.botConfPath)) {
+                issues.push(`${label} bot.conf 不存在: ${instance.botConfPath}`);
             }
         } else {
             if (!instance.host) {

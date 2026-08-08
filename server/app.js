@@ -49,6 +49,11 @@ function createApp(config, database, arenaService, shutdownSignal) {
             }
             arenaService.receiveRank(payload.rank);
             response.type('text').send('ok');
+            if (request.get('x-windbot-arena-forwarded') !== '1') {
+                Promise.resolve(arenaService.forwardRankReport(payload.rank)).catch((error) => {
+                    console.error(`[排行转发] ${error.message}`);
+                });
+            }
         } catch (error) {
             console.error(`[排行] 无法解析 POST: ${error.message}`);
             response.status(400).type('text').send('invalid payload');

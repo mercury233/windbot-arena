@@ -31,6 +31,19 @@ Name=Unleveled Deck=Unleveled Dialog=default
 Name=Manual Deck=SELECT_DECKFILE Dialog=manual
 `;
 
+test('configuration inspection reports incomplete settings without throwing', () => {
+    const settings = createDefaultArenaSettings();
+    settings.srvpro.rankPostPath = '';
+    const result = inspectConfiguration(settings);
+
+    assert.equal(result.valid, false);
+    assert.equal(result.modes.ranking.valid, false);
+    assert.ok(result.issues.includes('SRVPro 地址未配置'));
+    assert.ok(result.issues.includes('排行接收路径未配置'));
+    assert.ok(result.issues.includes('新版 WindBot 运行目录未配置'));
+    assert.ok(result.issues.includes('新版 bot.conf 路径未配置'));
+});
+
 test('parseBotConfig parses supported entries and filters manual bots', () => {
     const bots = parseBotConfig(botConfig);
     assert.deepEqual([...bots.keys()], ['Dragon', 'Deck With Spaces', 'Beginner', 'Unleveled']);

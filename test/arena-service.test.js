@@ -206,6 +206,53 @@ test('deck listing keeps current decks available without an old WindBot', () => 
     });
 });
 
+test('run creation rejects incomplete settings before persisting a run', () => {
+    const settings = createDefaultArenaSettings();
+    Object.assign(settings.windbots.current, {
+        botConfText: [
+            '!Alpha',
+            'Name=Alpha Deck=Alpha Dialog=default',
+            '!Beta',
+            'Name=Beta Deck=Beta Dialog=default',
+        ].join('\n'),
+        host: 'current.lan',
+        mode: 'remote',
+    });
+    let createdRunCount = 0;
+    const service = new ArenaService({}, {
+        createRun() {
+            createdRunCount++;
+        },
+        getArenaSettings: () => ({ settings }),
+    });
+
+    assert.throws(
+        () => service.createRun({ decks: ['Alpha', 'Beta'], kind: 'ranking' }),
+        (error) => error.statusCode === 400 && /SRVPro 地址未配置/.test(error.message),
+    );
+    assert.equal(createdRunCount, 0);
+    assert.equal(service.current, null);
+});
+
+test('incomplete settings are persisted and returned for continued editing', async () => {
+    const settings = createDefaultArenaSettings();
+    settings.srvpro.rankPostPath = '';
+    let savedSettings;
+    const database = {
+        getArenaSettings: () => ({ settings: savedSettings || settings }),
+        saveArenaSettings(value) {
+            savedSettings = structuredClone(value);
+            return { settings: value, updatedAt: '2026-08-08T00:00:00.000Z' };
+        },
+    };
+    const service = new ArenaService({}, database);
+
+    const result = await service.updateSettings(settings);
+    assert.equal(savedSettings.windbots.current.runtimeDir, '');
+    assert.equal(savedSettings.srvpro.rankPostPath, '');
+    assert.equal(result.settings.windbots.current.runtimeDir, '');
+});
+
 test('saving a remote bot.conf URL fetches and persists its content', async (context) => {
     const settings = createDefaultArenaSettings();
     Object.assign(settings.srvpro, {
@@ -316,4 +363,30 @@ test('WindBot output inspection distinguishes local and remote instances', () =>
         updatedAt: null,
     });
     assert.throws(() => service.getWindBotOutput('unknown'), (error) => error.statusCode === 404);
+});
+
+test('rank forwarding posts the original report with the production access key', async (context) => {
+    const settings = createDefaultArenaSettings();
+    settings.srvpro.accessKey = 'production-rank-key';
+    settings.development = {
+        rankForwardEnabled: true,
+        rankForwardUrl: 'http://dev-arena.lan:3000/score/report',
+    };
+    const service = new ArenaService({}, {
+        getArenaSettings: () => ({ settings }),
+    });
+    const rank = [['新-Dragon', { flee: 0, lose: 1, win: 2 }]];
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async (url, options) => {
+        assert.equal(url, 'http://dev-arena.lan:3000/score/report');
+        assert.equal(options.method, 'POST');
+        assert.equal(options.redirect, 'error');
+        assert.equal(options.headers['X-WindBot-Arena-Forwarded'], '1');
+        assert.equal(options.body.get('accesskey'), 'production-rank-key');
+        assert.deepEqual(JSON.parse(options.body.get('rank')), rank);
+        return new Response('ok');
+    };
+
+    assert.deepEqual(await service.forwardRankReport(rank), { forwarded: true });
 });
