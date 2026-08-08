@@ -811,23 +811,36 @@ class ArenaService extends EventEmitter {
         if (!forwarding?.rankForwardEnabled) {
             return { forwarded: false };
         }
-        const response = await fetchWithTimeout(
-            forwarding.rankForwardUrl,
-            10000,
-            undefined,
-            {
-                body: new URLSearchParams({
-                    accesskey: settings.srvpro.accessKey,
-                    rank: JSON.stringify(rank),
-                }),
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-WindBot-Arena-Forwarded': '1',
+        let response;
+        try {
+            response = await fetchWithTimeout(
+                forwarding.rankForwardUrl,
+                10000,
+                undefined,
+                {
+                    body: new URLSearchParams({
+                        accesskey: settings.srvpro.accessKey,
+                        rank: JSON.stringify(rank),
+                    }),
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-WindBot-Arena-Forwarded': '1',
+                    },
+                    method: 'POST',
+                    redirect: 'error',
                 },
-                method: 'POST',
-                redirect: 'error',
-            },
-        );
+            );
+        } catch (error) {
+            const causes = [
+                error,
+                error?.cause,
+                ...(Array.isArray(error?.cause?.errors) ? error.cause.errors : []),
+            ];
+            if (error?.name === 'TimeoutError' || causes.some((cause) => cause?.code === 'ECONNREFUSED')) {
+                return { forwarded: false };
+            }
+            throw error;
+        }
         if (!response.ok) {
             throw new Error(`开发机 Arena 返回 HTTP ${response.status}`);
         }

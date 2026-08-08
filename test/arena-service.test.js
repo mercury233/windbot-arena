@@ -429,3 +429,28 @@ test('rank forwarding posts the original report with the production access key',
 
     assert.deepEqual(await service.forwardRankReport(rank), { forwarded: true });
 });
+
+test('rank forwarding silently ignores timeouts and refused connections', async (context) => {
+    const settings = createDefaultArenaSettings();
+    settings.development = {
+        rankForwardEnabled: true,
+        rankForwardUrl: 'http://dev-arena.lan:3000/score/report',
+    };
+    const service = new ArenaService({}, {
+        getArenaSettings: () => ({ settings }),
+    });
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+
+    global.fetch = async () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    };
+    assert.deepEqual(await service.forwardRankReport([]), { forwarded: false });
+
+    global.fetch = async () => {
+        const error = new TypeError('fetch failed');
+        error.cause = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+        throw error;
+    };
+    assert.deepEqual(await service.forwardRankReport([]), { forwarded: false });
+});
