@@ -2,10 +2,6 @@
 
 function createDefaultArenaSettings() {
     return {
-        development: {
-            rankForwardEnabled: false,
-            rankForwardUrl: '',
-        },
         scheduler: {
             pairDelayMs: 250,
             pairsPerTick: 2,
@@ -13,13 +9,10 @@ function createDefaultArenaSettings() {
             settleMinutes: 30,
         },
         srvpro: {
-            accessKey: '',
             duelPort: 7911,
             host: '',
-            maxRankNames: 1000,
             maxRooms: 100,
             password: '',
-            rankPostPath: '/',
             statusPort: 7922,
             username: '',
         },
@@ -99,50 +92,8 @@ function validateAndMergeArenaSettings(input, existing) {
     const password = typeof srvpro.password === 'string' && srvpro.password !== ''
         ? srvpro.password
         : previous.srvpro.password;
-    const accessKey = typeof srvpro.accessKey === 'string' && srvpro.accessKey !== ''
-        ? srvpro.accessKey
-        : previous.srvpro.accessKey;
-    const rankPostPath = String(srvpro.rankPostPath || '').trim();
-    if (
-        rankPostPath
-        && (
-            !rankPostPath.startsWith('/')
-            || rankPostPath.length > 200
-            || /[?#\s]/.test(rankPostPath)
-        )
-    ) {
-        throw new Error('排行接收路径必须是以 / 开头且不含查询参数、片段或空白的 URL 路径');
-    }
-    const reservedApiPaths = ['/api/decks', '/api/events', '/api/runs', '/api/settings', '/api/system'];
-    if (reservedApiPaths.some((path) => rankPostPath === path || rankPostPath.startsWith(`${path}/`))) {
-        throw new Error('排行接收路径不能与 Arena API 路径冲突');
-    }
-
-    const rankForwardEnabled = input.development?.rankForwardEnabled === true;
-    const rankForwardUrl = String(input.development?.rankForwardUrl || '').trim();
-    if (rankForwardEnabled && !rankForwardUrl) {
-        throw new Error('启用排行转发时必须填写开发机排行接收 URL');
-    }
-    if (rankForwardUrl) {
-        let url;
-        try {
-            url = new URL(rankForwardUrl);
-        } catch {
-            throw new Error('开发机排行接收 URL 无效');
-        }
-        if (!['http:', 'https:'].includes(url.protocol)) {
-            throw new Error('开发机排行接收 URL 只支持 HTTP 或 HTTPS');
-        }
-        if (rankForwardUrl.length > 2000) {
-            throw new Error('开发机排行接收 URL 不能超过 2000 个字符');
-        }
-    }
 
     const settings = {
-        development: {
-            rankForwardEnabled,
-            rankForwardUrl,
-        },
         scheduler: {
             pairDelayMs: readInteger(input.scheduler?.pairDelayMs, '双方加入间隔', 0, 60000),
             pairsPerTick: readInteger(input.scheduler?.pairsPerTick, '每轮创建对局数', 1, 100),
@@ -150,13 +101,10 @@ function validateAndMergeArenaSettings(input, existing) {
             settleMinutes: readInteger(input.scheduler?.settleMinutes, '统计等待时间', 1, 1440),
         },
         srvpro: {
-            accessKey,
             duelPort: readInteger(srvpro.duelPort, 'SRVPro 对战端口', 1, 65535),
             host: String(srvpro.host || '').trim(),
-            maxRankNames: readInteger(srvpro.maxRankNames, '排行榜名称上限', 2, 100000),
             maxRooms: readInteger(srvpro.maxRooms, '房间上限', 1, 100000),
             password,
-            rankPostPath,
             statusPort: readInteger(srvpro.statusPort, 'SRVPro 管理端口', 1, 65535),
             username: String(srvpro.username || '').trim(),
         },
@@ -186,13 +134,15 @@ function getWindBotEndpoint(windbot) {
 function getPublicArenaSettings(settings, updatedAt) {
     const result = structuredClone(settings);
     result.srvpro.password = '';
-    result.srvpro.accessKey = '';
+    delete result.srvpro.accessKey;
+    delete result.srvpro.maxRankNames;
+    delete result.srvpro.rankPostPath;
+    delete result.development;
     for (const instance of Object.values(result.windbots)) {
         instance.botConfUrl ||= '';
     }
     return {
         secretStatus: {
-            accessKeyConfigured: settings.srvpro.accessKey !== '',
             passwordConfigured: settings.srvpro.password !== '',
         },
         settings: result,

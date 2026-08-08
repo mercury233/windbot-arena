@@ -21,6 +21,7 @@ const { normalizeRank } = require('./stats');
 const PRIVATE_DUEL_ROOM_MIN = 100000000;
 const PRIVATE_DUEL_ROOM_MAX = 999999999;
 const MAX_WINDBOT_OUTPUT_LENGTH = 2000000;
+const SCORE_POLL_MS = 15000;
 
 function requestError(message, statusCode = 400) {
     const error = new Error(message);
@@ -104,7 +105,6 @@ class ArenaService extends EventEmitter {
             botConfigFingerprints: this.getBotConfigFingerprints(settings),
             configuration: inspection,
             endpoints: {
-                rankPost: settings.srvpro.rankPostPath,
                 web: `http://${this.runtimeConfig.listenHost}:${this.runtimeConfig.listenPort}`,
             },
             storage: {
@@ -289,14 +289,6 @@ class ArenaService extends EventEmitter {
         };
     }
 
-    getRankAccessKey() {
-        return this.database.getArenaSettings().settings.srvpro.accessKey;
-    }
-
-    getRankPostPath() {
-        return this.database.getArenaSettings().settings.srvpro.rankPostPath;
-    }
-
     listDecks() {
         const { settings } = this.database.getArenaSettings();
         const inspection = inspectConfiguration(settings);
@@ -448,13 +440,14 @@ class ArenaService extends EventEmitter {
                 `${context.kind === 'regression' ? '两套' : '新版'} WindBot 已就绪，开始创建对局`,
             );
             this.emitChange(context.id, 'running');
+            context.scorePoller = this.pollScores(context);
             await this.scheduleGames(context);
 
             if (context.kind !== 'regression') {
                 throw new Error('无限测试的调度意外结束');
             }
             this.database.setRunStatus(context.id, 'settling');
-            this.database.addEvent(context.id, 'info', 'settling', '对局已全部创建，正在等待排行统计回报');
+            this.database.addEvent(context.id, 'info', 'settling', '对局已全部创建，正在等待排行统计');
             this.emitChange(context.id, 'settling');
             const fullyObserved = await this.waitForResults(context);
             if (!fullyObserved) {
@@ -554,6 +547,62 @@ class ArenaService extends EventEmitter {
             throw new Error('SRVPro 管理账号或密码错误');
         }
         return body.rooms;
+    }
+
+    async pollScores(context, intervalMs = SCORE_POLL_MS) {
+        const { signal } = context.abortController;
+        while (!signal.aborted && !context.finished && this.current === context) {
+            try {
+                const srvpro = context.settings.srvpro;
+                const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/getscores');
+                url.searchParams.set('type', 'private');
+                url.searchParams.set('username', srvpro.username);
+                url.searchParams.set('pass', srvpro.password);
+                const response = await fetchWithTimeout(url, 5000, signal);
+                if (!response.ok) {
+                    throw new Error(`排行 API 返回 HTTP ${response.status}`);
+                }
+                const body = await response.json();
+                if (body?.type !== 'private' || !Array.isArray(body.scores)) {
+                    throw new Error('排行 API 响应格式无效');
+                }
+                const rank = body.scores.map((score, index) => {
+                    if (!score || typeof score !== 'object' || Array.isArray(score)) {
+                        throw new Error(`排行 API 的 scores[${index}] 不是对象`);
+                    }
+                    if (typeof score.name !== 'string') {
+                        throw new Error(`排行 API 的 scores[${index}].name 不是字符串`);
+                    }
+                    return [score.name, {
+                        combo: score.combo,
+                        flee: score.flee,
+                        lose: score.lose,
+                        win: score.win,
+                    }];
+                });
+                if (!signal.aborted && !context.finished && this.current === context) {
+                    this.receiveRank(rank);
+                }
+            } catch (error) {
+                if (signal.aborted || isAbortError(error)) {
+                    return;
+                }
+                this.database.addEvent(
+                    context.id,
+                    'warning',
+                    'score-poll-error',
+                    `查询 SRVPro 排行失败: ${error.message}`,
+                );
+            }
+            try {
+                await sleep(intervalMs, signal);
+            } catch (error) {
+                if (signal.aborted || isAbortError(error)) {
+                    return;
+                }
+                throw error;
+            }
+        }
     }
 
     async getRoomCount(context) {
@@ -805,48 +854,6 @@ class ArenaService extends EventEmitter {
         return { matchedRunId: context.id, receivedAt };
     }
 
-    async forwardRankReport(rank) {
-        const { settings } = this.database.getArenaSettings();
-        const forwarding = settings.development;
-        if (!forwarding?.rankForwardEnabled) {
-            return { forwarded: false };
-        }
-        let response;
-        try {
-            response = await fetchWithTimeout(
-                forwarding.rankForwardUrl,
-                10000,
-                undefined,
-                {
-                    body: new URLSearchParams({
-                        accesskey: settings.srvpro.accessKey,
-                        rank: JSON.stringify(rank),
-                    }),
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'X-WindBot-Arena-Forwarded': '1',
-                    },
-                    method: 'POST',
-                    redirect: 'error',
-                },
-            );
-        } catch (error) {
-            const causes = [
-                error,
-                error?.cause,
-                ...(Array.isArray(error?.cause?.errors) ? error.cause.errors : []),
-            ];
-            if (error?.name === 'TimeoutError' || causes.some((cause) => cause?.code === 'ECONNREFUSED')) {
-                return { forwarded: false };
-            }
-            throw error;
-        }
-        if (!response.ok) {
-            throw new Error(`开发机 Arena 返回 HTTP ${response.status}`);
-        }
-        return { forwarded: true };
-    }
-
     stopRun(runId, reason = '用户从 Web 界面停止了测试') {
         if (!this.current || this.current.id !== runId) {
             throw requestError('该测试当前不在运行', 409);
@@ -867,6 +874,10 @@ class ArenaService extends EventEmitter {
             return;
         }
         context.finished = true;
+        if (!context.abortController.signal.aborted) {
+            context.abortController.abort(new DOMException('任务已结束', 'AbortError'));
+        }
+        await context.scorePoller;
         for (const child of context.children) {
             if (child.exitCode === null) {
                 child.kill();
@@ -903,4 +914,4 @@ class ArenaService extends EventEmitter {
     }
 }
 
-module.exports = { ArenaService, requestError };
+module.exports = { ArenaService, SCORE_POLL_MS, requestError };

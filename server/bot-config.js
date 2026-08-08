@@ -140,9 +140,6 @@ function validateRankNames(matchups, settings) {
             overlongRankNames.map((name) => `“${name}”`).join('、')
         }`);
     }
-    if (rankNames.length > settings.srvpro.maxRankNames) {
-        throw new Error(`本次测试会生成 ${rankNames.length} 个机器人名称，超过排行榜限制`);
-    }
 }
 
 function buildRegressionMatchups(settings, requestedDecks) {
@@ -299,8 +296,6 @@ function inspectConfiguration(settings) {
         ['SRVPro 地址', srvpro.host],
         ['SRVPro 管理账号', srvpro.username],
         ['SRVPro 管理密码', srvpro.password],
-        ['排行接收路径', srvpro.rankPostPath],
-        ['排行接收密钥', srvpro.accessKey],
     ]) {
         if (typeof value !== 'string' || value.trim() === '') {
             baseIssues.push(`${label}未配置`);

@@ -5,7 +5,7 @@ const childProcess = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const test = require('node:test');
-const { ArenaService } = require('../server/arena-service');
+const { ArenaService, SCORE_POLL_MS } = require('../server/arena-service');
 const { createDefaultArenaSettings } = require('../server/arena-settings');
 
 function makeSchedulingContext(kind, labels) {
@@ -239,7 +239,6 @@ test('run creation rejects incomplete settings before persisting a run', () => {
 
 test('incomplete settings are persisted and returned for continued editing', async () => {
     const settings = createDefaultArenaSettings();
-    settings.srvpro.rankPostPath = '';
     let savedSettings;
     const database = {
         getArenaSettings: () => ({ settings: savedSettings || settings }),
@@ -252,14 +251,12 @@ test('incomplete settings are persisted and returned for continued editing', asy
 
     const result = await service.updateSettings(settings);
     assert.equal(savedSettings.windbots.current.runtimeDir, '');
-    assert.equal(savedSettings.srvpro.rankPostPath, '');
     assert.equal(result.settings.windbots.current.runtimeDir, '');
 });
 
 test('saving a remote bot.conf URL fetches and persists its content', async (context) => {
     const settings = createDefaultArenaSettings();
     Object.assign(settings.srvpro, {
-        accessKey: 'key',
         host: 'srvpro.lan',
         password: 'password',
         username: 'admin',
@@ -404,53 +401,86 @@ test('local WindBot output is decoded from the Windows Chinese code page', (cont
     assert.doesNotMatch(loggedOutput, /�/);
 });
 
-test('rank forwarding posts the original report with the production access key', async (context) => {
-    const settings = createDefaultArenaSettings();
-    settings.srvpro.accessKey = 'production-rank-key';
-    settings.development = {
-        rankForwardEnabled: true,
-        rankForwardUrl: 'http://dev-arena.lan:3000/score/report',
+test('score polling reads the private SRVPro ranking every 15 seconds', async (context) => {
+    assert.equal(SCORE_POLL_MS, 15000);
+    const received = [];
+    const service = new ArenaService({}, { addEvent() {} });
+    const activeContext = {
+        abortController: new AbortController(),
+        finished: false,
+        id: 'poll-run',
+        settings: {
+            srvpro: {
+                host: 'srvpro.lan',
+                password: 'management-secret',
+                statusPort: 7922,
+                username: 'arena',
+            },
+        },
     };
-    const service = new ArenaService({}, {
-        getArenaSettings: () => ({ settings }),
-    });
-    const rank = [['新-Dragon', { flee: 0, lose: 1, win: 2 }]];
+    service.current = activeContext;
     const originalFetch = global.fetch;
     context.after(() => { global.fetch = originalFetch; });
-    global.fetch = async (url, options) => {
-        assert.equal(url, 'http://dev-arena.lan:3000/score/report');
-        assert.equal(options.method, 'POST');
-        assert.equal(options.redirect, 'error');
-        assert.equal(options.headers['X-WindBot-Arena-Forwarded'], '1');
-        assert.equal(options.body.get('accesskey'), 'production-rank-key');
-        assert.deepEqual(JSON.parse(options.body.get('rank')), rank);
-        return new Response('ok');
+    global.fetch = async (url) => {
+        assert.equal(url.hostname, 'srvpro.lan');
+        assert.equal(url.port, '7922');
+        assert.equal(url.pathname, '/api/getscores');
+        assert.equal(url.searchParams.get('type'), 'private');
+        assert.equal(url.searchParams.get('username'), 'arena');
+        assert.equal(url.searchParams.get('pass'), 'management-secret');
+        return Response.json({
+            scores: [{ combo: 3, flee: 1, lose: 2, name: '新-Dragon', win: 4 }],
+            type: 'private',
+        });
+    };
+    service.receiveRank = (rank) => {
+        received.push(rank);
+        activeContext.abortController.abort(new DOMException('done', 'AbortError'));
     };
 
-    assert.deepEqual(await service.forwardRankReport(rank), { forwarded: true });
+    await service.pollScores(activeContext, 1);
+    assert.deepEqual(received, [
+        [['新-Dragon', { combo: 3, flee: 1, lose: 2, win: 4 }]],
+    ]);
 });
 
-test('rank forwarding silently ignores timeouts and refused connections', async (context) => {
-    const settings = createDefaultArenaSettings();
-    settings.development = {
-        rankForwardEnabled: true,
-        rankForwardUrl: 'http://dev-arena.lan:3000/score/report',
-    };
+test('score polling continues after a transient query failure', async (context) => {
+    const events = [];
+    const received = [];
     const service = new ArenaService({}, {
-        getArenaSettings: () => ({ settings }),
+        addEvent(...args) { events.push(args); },
     });
+    const activeContext = {
+        abortController: new AbortController(),
+        finished: false,
+        id: 'poll-run',
+        settings: {
+            srvpro: {
+                host: 'srvpro.lan',
+                password: 'management-secret',
+                statusPort: 7922,
+                username: 'arena',
+            },
+        },
+    };
+    service.current = activeContext;
     const originalFetch = global.fetch;
     context.after(() => { global.fetch = originalFetch; });
-
+    let requestCount = 0;
     global.fetch = async () => {
-        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+        requestCount++;
+        if (requestCount === 1) {
+            throw new TypeError('fetch failed');
+        }
+        return Response.json({ scores: [], type: 'private' });
     };
-    assert.deepEqual(await service.forwardRankReport([]), { forwarded: false });
+    service.receiveRank = (rank) => {
+        received.push(rank);
+        activeContext.abortController.abort(new DOMException('done', 'AbortError'));
+    };
 
-    global.fetch = async () => {
-        const error = new TypeError('fetch failed');
-        error.cause = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
-        throw error;
-    };
-    assert.deepEqual(await service.forwardRankReport([]), { forwarded: false });
+    await service.pollScores(activeContext, 1);
+    assert.equal(requestCount, 2);
+    assert.deepEqual(received, [[]]);
+    assert.equal(events[0][2], 'score-poll-error');
 });

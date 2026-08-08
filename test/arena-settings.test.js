@@ -11,7 +11,6 @@ const {
 function makeValidSettings() {
     const settings = createDefaultArenaSettings();
     Object.assign(settings.srvpro, {
-        accessKey: 'rank-secret',
         host: 'srvpro.lan',
         password: 'admin-secret',
         username: 'arena',
@@ -33,34 +32,30 @@ test('settings validation preserves configured secrets when fields are blank', (
     const existing = makeValidSettings();
     const input = structuredClone(existing);
     input.srvpro.password = '';
-    input.srvpro.accessKey = '';
-    input.srvpro.rankPostPath = '/srvpro/score';
     const result = validateAndMergeArenaSettings(input, existing);
     assert.equal(result.srvpro.password, 'admin-secret');
-    assert.equal(result.srvpro.accessKey, 'rank-secret');
-    assert.equal(result.srvpro.rankPostPath, '/srvpro/score');
 });
 
 test('incomplete runtime settings can still be saved', () => {
     const settings = createDefaultArenaSettings();
-    settings.srvpro.rankPostPath = '';
     const result = validateAndMergeArenaSettings(settings, settings);
 
     assert.equal(result.srvpro.host, '');
     assert.equal(result.srvpro.username, '');
     assert.equal(result.srvpro.password, '');
-    assert.equal(result.srvpro.accessKey, '');
-    assert.equal(result.srvpro.rankPostPath, '');
     assert.equal(result.windbots.current.runtimeDir, '');
     assert.equal(result.windbots.current.botConfPath, '');
 });
 
 test('public settings never expose SRVPro secrets', () => {
-    const result = getPublicArenaSettings(makeValidSettings(), '2026-08-08T00:00:00.000Z');
+    const settings = makeValidSettings();
+    settings.srvpro.accessKey = 'obsolete-rank-secret';
+    settings.development = { rankForwardEnabled: true };
+    const result = getPublicArenaSettings(settings, '2026-08-08T00:00:00.000Z');
     assert.equal(result.settings.srvpro.password, '');
-    assert.equal(result.settings.srvpro.accessKey, '');
+    assert.equal('accessKey' in result.settings.srvpro, false);
+    assert.equal('development' in result.settings, false);
     assert.equal(result.secretStatus.passwordConfigured, true);
-    assert.equal(result.secretStatus.accessKeyConfigured, true);
     assert.equal(result.settings.windbots.current.botConfUrl, '');
 });
 
@@ -133,35 +128,4 @@ test('configured WindBot definitions cannot point to the same endpoint', () => {
         () => validateAndMergeArenaSettings(settings, settings),
         /不能使用同一服务地址与端口/,
     );
-});
-
-test('rank endpoint cannot conflict with Arena APIs', () => {
-    const settings = makeValidSettings();
-    settings.srvpro.rankPostPath = '/api/runs/active';
-    assert.throws(
-        () => validateAndMergeArenaSettings(settings, settings),
-        /不能与 Arena API 路径冲突/,
-    );
-});
-
-test('development rank forwarding requires an HTTP endpoint when enabled', () => {
-    const settings = makeValidSettings();
-    settings.development.rankForwardEnabled = true;
-    assert.throws(
-        () => validateAndMergeArenaSettings(settings, settings),
-        /必须填写开发机排行接收 URL/,
-    );
-
-    settings.development.rankForwardUrl = 'file:///tmp/rank';
-    assert.throws(
-        () => validateAndMergeArenaSettings(settings, settings),
-        /只支持 HTTP 或 HTTPS/,
-    );
-
-    settings.development.rankForwardUrl = 'http://dev-arena.lan:3000/score/report';
-    const result = validateAndMergeArenaSettings(settings, settings);
-    assert.deepEqual(result.development, {
-        rankForwardEnabled: true,
-        rankForwardUrl: 'http://dev-arena.lan:3000/score/report',
-    });
 });

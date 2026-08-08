@@ -4,22 +4,10 @@ const assert = require('node:assert/strict');
 const { createServer } = require('node:http');
 const path = require('node:path');
 const test = require('node:test');
-const { createApp, readRankPayload } = require('../server/app');
-
-test('readRankPayload accepts the SRVPro form body', () => {
-    const rank = [['新-Dragon', { win: 2, lose: 1, flee: 0 }]];
-    const body = new URLSearchParams({
-        accesskey: 'secret',
-        rank: JSON.stringify(rank),
-    }).toString();
-    assert.deepEqual(readRankPayload(body), {
-        accessKey: 'secret',
-        rank,
-    });
-});
+const { createApp } = require('../server/app');
 
 test('development backend redirects page requests to the Vite server', async (context) => {
-    const service = { getRankPostPath: () => '/score/report' };
+    const service = {};
     const app = createApp({
         clientDevUrl: 'http://127.0.0.1:5173',
         rootDir: path.resolve(__dirname, '..'),
@@ -36,25 +24,19 @@ test('development backend redirects page requests to the Vite server', async (co
     assert.equal(response.headers.get('location'), 'http://127.0.0.1:5173/history?page=2');
 });
 
-test('settings API saves configuration and the configured rank endpoint checks the stored key', async (context) => {
+test('settings, room, WindBot and run APIs return service data', async (context) => {
     let savedSettings;
-    let receivedRank;
     let refreshedDecks = false;
     let requestedRunPage;
-    let forwardedRankCount = 0;
     const publicRecord = {
-        secretStatus: { accessKeyConfigured: true, passwordConfigured: true },
-        settings: { srvpro: { accessKey: '', password: '' } },
+        secretStatus: { passwordConfigured: true },
+        settings: { srvpro: { password: '' } },
         updatedAt: '2026-08-08T00:00:00.000Z',
     };
     const service = {
-        getRankAccessKey: () => 'rank-secret',
-        getRankPostPath: () => '/score/report',
         getSettings: () => publicRecord,
         getWindBotOutput: (name) => ({ available: true, name, output: 'ready' }),
         listRooms: () => ({ rooms: [{ id: '123', name: 'M,RANDOM#123' }] }),
-        forwardRankReport: () => { forwardedRankCount++; },
-        receiveRank: (rank) => { receivedRank = rank; },
         refreshBotConfigs: () => {
             refreshedDecks = true;
             return { configuration: {}, fetchedRemoteCount: 1 };
@@ -107,40 +89,12 @@ test('settings API saves configuration and the configured rank endpoint checks t
     });
     assert.deepEqual(requestedRunPage, { limit: 10, offset: 20 });
 
-    const rank = [['新-Dragon', { win: 1 }]];
-    const rejected = await fetch(`${baseUrl}/score/report`, {
-        body: new URLSearchParams({ accesskey: 'wrong', rank: JSON.stringify(rank) }),
-        method: 'POST',
-    });
-    assert.equal(rejected.status, 403);
-    const accepted = await fetch(`${baseUrl}/score/report`, {
-        body: new URLSearchParams({ accesskey: 'rank-secret', rank: JSON.stringify(rank) }),
-        method: 'POST',
-    });
-    assert.equal(accepted.status, 200);
-    assert.deepEqual(receivedRank, rank);
-    assert.equal(forwardedRankCount, 1);
-
-    const forwarded = await fetch(`${baseUrl}/score/report`, {
-        body: new URLSearchParams({ accesskey: 'rank-secret', rank: JSON.stringify(rank) }),
-        headers: { 'X-WindBot-Arena-Forwarded': '1' },
-        method: 'POST',
-    });
-    assert.equal(forwarded.status, 200);
-    assert.equal(forwardedRankCount, 1);
-
-    const unconfiguredPath = await fetch(`${baseUrl}/`, {
-        body: new URLSearchParams({ accesskey: 'rank-secret', rank: JSON.stringify(rank) }),
-        method: 'POST',
-    });
-    assert.equal(unconfiguredPath.status, 404);
 });
 
 test('shutdown signal closes SSE connections so the HTTP server can stop', async () => {
     const shutdownController = new AbortController();
     const listeners = new Set();
     const service = {
-        getRankPostPath: () => '/score/report',
         off: (event, listener) => listeners.delete(listener),
         on: (event, listener) => listeners.add(listener),
     };

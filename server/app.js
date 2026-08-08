@@ -1,70 +1,16 @@
 'use strict';
 
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
 
-function safeEqual(left, right) {
-    const leftBuffer = Buffer.from(String(left));
-    const rightBuffer = Buffer.from(String(right));
-    return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function readRankPayload(body) {
-    let fields = body;
-    if (typeof body === 'string') {
-        fields = Object.fromEntries(new URLSearchParams(body));
-    }
-    if (!fields || typeof fields !== 'object') {
-        throw new Error('请求体为空');
-    }
-    if (fields.rank === undefined) {
-        throw new Error('缺少 rank 字段');
-    }
-    return {
-        accessKey: fields.accesskey,
-        rank: typeof fields.rank === 'string' ? JSON.parse(fields.rank) : fields.rank,
-    };
-}
-
 function createApp(config, database, arenaService, shutdownSignal) {
     const app = express();
     app.disable('x-powered-by');
-    app.use(express.urlencoded({ extended: false, limit: '1mb' }));
     app.use(express.json({ limit: '1mb' }));
-    app.use(express.text({ type: ['text/plain', 'application/octet-stream'], limit: '1mb' }));
     app.use('/api', (request, response, next) => {
         response.set('Cache-Control', 'no-store');
         next();
-    });
-
-    const receiveRankPost = (request, response) => {
-        try {
-            const payload = readRankPayload(request.body);
-            const accessKey = arenaService.getRankAccessKey();
-            if (!accessKey || !safeEqual(payload.accessKey || '', accessKey)) {
-                response.status(403).type('text').send('invalid accesskey');
-                return;
-            }
-            arenaService.receiveRank(payload.rank);
-            response.type('text').send('ok');
-            if (request.get('x-windbot-arena-forwarded') !== '1') {
-                Promise.resolve(arenaService.forwardRankReport(payload.rank)).catch((error) => {
-                    console.error(`[排行转发] ${error.message}`);
-                });
-            }
-        } catch (error) {
-            console.error(`[排行] 无法解析 POST: ${error.message}`);
-            response.status(400).type('text').send('invalid payload');
-        }
-    };
-    app.use((request, response, next) => {
-        if (request.method !== 'POST' || request.path !== arenaService.getRankPostPath()) {
-            next();
-            return;
-        }
-        receiveRankPost(request, response);
     });
 
     app.get('/api/system', (request, response) => {
@@ -244,4 +190,4 @@ function createApp(config, database, arenaService, shutdownSignal) {
     return app;
 }
 
-module.exports = { createApp, readRankPayload };
+module.exports = { createApp };

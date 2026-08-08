@@ -33,13 +33,11 @@ Name=Manual Deck=SELECT_DECKFILE Dialog=manual
 
 test('configuration inspection reports incomplete settings without throwing', () => {
     const settings = createDefaultArenaSettings();
-    settings.srvpro.rankPostPath = '';
     const result = inspectConfiguration(settings);
 
     assert.equal(result.valid, false);
     assert.equal(result.modes.ranking.valid, false);
     assert.ok(result.issues.includes('SRVPro 地址未配置'));
-    assert.ok(result.issues.includes('排行接收路径未配置'));
     assert.ok(result.issues.includes('新版 WindBot 运行目录未配置'));
     assert.ok(result.issues.includes('新版 bot.conf 路径未配置'));
 });
@@ -73,7 +71,6 @@ test('buildRegressionMatchups creates generalized competitors', (context) => {
     fs.writeFileSync(oldBotConf, botConfig.replace('Dragon Bot', 'Legacy Dragon'));
 
     const settings = createDefaultArenaSettings();
-    settings.srvpro.maxRankNames = 1000;
     settings.windbots.current = {
         ...settings.windbots.current,
         botConfPath: currentBotConf,
@@ -146,7 +143,6 @@ test('catalog sorts AI levels descending while bulk selection excludes AI_LV1', 
 
 test('challenge shares the target rank and keeps opponent bot names', () => {
     const settings = createDefaultArenaSettings();
-    settings.srvpro.maxRankNames = 1000;
     settings.windbots.current = {
         ...settings.windbots.current,
         botConfText: botConfig,
@@ -220,7 +216,6 @@ test('current-only modes remain available when the old WindBot is not configured
     const settings = createDefaultArenaSettings();
     settings.srvpro = {
         ...settings.srvpro,
-        accessKey: 'key',
         host: 'srvpro.lan',
         password: 'password',
         username: 'admin',

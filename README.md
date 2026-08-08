@@ -5,9 +5,8 @@ WindBot Arena 是自托管的 WindBot 对战实验控制台。目前提供“新
 Node.js 服务同时负责：
 
 - 提供 Vue + Naive UI 网站、JSON API 和实时事件；
-- 重启专用 SRVPro、查询房间并创建 Match 模式对局；
+- 管理专用 SRVPro、创建 Match 模式对局，查询房间和胜负结果并保存统计；
 - 管理本地 WindBot 进程，或调用用户手动运行的远程 WindBot Server；
-- 在网页配置的路径接收 SRVPro 排行 POST。
 
 ## 安装与启动
 
@@ -33,7 +32,7 @@ npm.cmd start
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `WINDBOT_ARENA_HOST` | `0.0.0.0` | HTTP 监听地址 |
-| `WINDBOT_ARENA_PORT` | `3000` | 网站、API 和排行接收端口 |
+| `WINDBOT_ARENA_PORT` | `3000` | 网站和 API 端口 |
 | `WINDBOT_ARENA_DATABASE` | `data/arena.sqlite` | SQLite 文件路径 |
 
 开发模式：
@@ -48,11 +47,11 @@ npm.cmd run dev
 
 所有业务配置都存储在 SQLite 的 `arena_settings` 表中，包括：
 
-- SRVPro 地址、端口、管理凭据、排行接收路径、排行密钥和容量限制；
+- SRVPro 地址、端口、管理凭据和容量限制；
 - 新版与旧版 WindBot 的运行模式、HTTP 端点和 `bot.conf`；
 - 对局创建速度、轮询间隔和统计等待时间。
 
-管理密码和排行密钥不会由读取 API 返回到浏览器。配置页中的密钥输入框留空会保留已有值。
+管理密码不会由读取 API 返回到浏览器。配置页中的密码输入框留空会保留已有值。
 
 ### 本地 WindBot
 
@@ -86,25 +85,11 @@ Arena 无法直接读取远端文件系统。可以把 `bot.conf` 粘贴到网�
 
 Arena 为每组 Bot 生成一个 `M#123456789` 形式的唯一房名，并向双方 WindBot 发送相同的 `password`。SRVPro 会让房名相同的双方进入同一房间，并把这些普通约战房间的结果计入独立的 `private_duel` 排行。下一组使用新的房名，因此不会与其他正在创建或等待中的对局混合；任一 WindBot 启动请求失败或超时时，Arena 会通过 SRVPro 管理 API 关闭该组房间。
 
-约战房名由 Arena 自动生成，不属于用户配置。当前胜负结果仍以 SRVPro 定时发送的累计排行为准。
+约战房名由 Arena 自动生成，不属于用户配置。当前胜负结果以 SRVPro 的累计约战排行为准。
 
-SRVPro 的生产配置需要启用 `modules.private_duel.record_match_scores`，把 `post_match_scores` 和 `post_match_accesskey` 指向 Arena，并确保 `post_match_scores_limit` 不小于 Arena 中配置的“排行榜名称上限”。Arena 使用的 SRVPro 管理账号还需要 `kick_user` 权限，以便启动请求失败时关闭约战房间。需注意 SRVPro 默认配置中的约战统计和回报均为关闭状态。
+SRVPro 需要启用 `modules.private_duel.record_match_scores`，管理账号需要 `get_private_scores` 和 `kick_user` 权限；`post_match_scores` 可以保持关闭。
 
 界面中的“新版胜率”按 `新版胜场 /（新版胜场 + 旧版胜场）` 计算。正常完成的对局中它与新版自身的胜负统计一致；逃跑作为异常计数单独展示，不再提供含义高度重叠的第二个胜率指标。“已统计对局”只按 `win + lose` 计算，`flee` 不会额外增加完成局数。
-
-## SRVPro 排行回报
-
-SRVPro 使用表单提交排行：
-
-```text
-POST https://arena.example.com/srvpro/rank
-Content-Type: application/x-www-form-urlencoded
-
-accesskey=<网页中配置的排行接收密钥>
-rank=<JSON 排行数组>
-```
-
-`post_match_scores` 是完整 URL，SRVPro 不会自行追加路径。其中的路径必须与网页配置的“排行接收路径”完全相同；默认值为 `/`，也可以配置为 `/api/rank` 或其他不与 Arena API 冲突的路径。Arena 只接受当前配置路径上的排行 POST。`rank` 使用 `[名称, 统计对象]` 数组格式。未配置密钥或密钥不匹配时，接口返回 `403`。
 
 配置中的 SRVPro 是 Arena 专用实例。每次测试会直接调用管理接口重启服务并清理其房间，无需保护其他业务房间。
 
@@ -115,7 +100,6 @@ rank=<JSON 排行数组>
 必须注意：
 
 - 当前项目没有内置用户登录。不要把 3000 端口直接暴露到公网；控制台和普通 API 应由反向代理登录、单点登录或私有网络保护。
-- 排行 POST 依靠独立的 `accessKey` 校验。反向代理认证规则应单独放行网页中配置的排行接收路径，并让 SRVPro 的完整回报 URL 使用同一路径。
 - 实时状态使用 Server-Sent Events。Nginx 等代理应关闭该连接的响应缓冲；服务已经发送 `X-Accel-Buffering: no`。
 - 将 `data/` 挂载到持久卷，并定期备份 `arena.sqlite` 及其 WAL 文件。
 - NAS 到 SRVPro、远程 WindBot 的 HTTP 端口必须可达；远程主机还需要正确配置 Windows URL ACL 与防火墙。
@@ -139,7 +123,7 @@ rank=<JSON 排行数组>
 ```text
 client/                      Vue + Naive UI 控制台
 client/src/SettingsModal.vue 网页配置界面
-server/app.js                HTTP API、排行 POST 与静态网站
+server/app.js                HTTP API 与静态网站
 server/arena-settings.js     业务配置默认值、校验与脱敏
 server/arena-service.js      测试生命周期、WindBot 与 SRVPro 调度
 server/database.js           SQLite 访问与结果聚合

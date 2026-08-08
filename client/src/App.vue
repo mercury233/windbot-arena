@@ -188,11 +188,11 @@ const modeConfiguration = computed(() => (
     || { issues: system.value?.configuration.issues || [], valid: system.value?.configuration.valid === true }
 ));
 const configurationReady = computed(() => modeConfiguration.value.valid === true);
-const inspectorTitle = computed(() => ({
-    current: '新版 WindBot 命令行输出',
-    old: '旧版 WindBot 命令行输出',
-    srvpro: 'SRVPro 房间列表',
-}[inspectorKind.value]));
+const inspectorTitle = computed(() => (
+    inspectorKind.value === 'srvpro'
+        ? `SRVPro 房间列表（${inspectorRooms.value.length}）`
+        : `${inspectorKind.value === 'current' ? '新版' : '旧版'} WindBot 命令行输出`
+));
 const canStart = computed(() => {
     if (!configurationReady.value || activeRun.value) {
         return false;
