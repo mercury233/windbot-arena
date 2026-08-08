@@ -1,6 +1,9 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
 const test = require('node:test');
 const { ArenaService } = require('../server/arena-service');
 const { createDefaultArenaSettings } = require('../server/arena-settings');
@@ -363,6 +366,42 @@ test('WindBot output inspection distinguishes local and remote instances', () =>
         updatedAt: null,
     });
     assert.throws(() => service.getWindBotOutput('unknown'), (error) => error.statusCode === 404);
+});
+
+test('local WindBot output is decoded from the Windows Chinese code page', (context) => {
+    const child = Object.assign(new EventEmitter(), {
+        exitCode: null,
+        stderr: new PassThrough(),
+        stdout: new PassThrough(),
+    });
+    const originalSpawn = childProcess.spawn;
+    const originalStderrWrite = process.stderr.write;
+    let loggedOutput = '';
+    context.after(() => {
+        childProcess.spawn = originalSpawn;
+        process.stderr.write = originalStderrWrite;
+    });
+    childProcess.spawn = () => child;
+    process.stderr.write = (output) => {
+        loggedOutput += String(output);
+        return true;
+    };
+    const settings = createDefaultArenaSettings();
+    const service = new ArenaService({}, {
+        getArenaSettings: () => ({ settings }),
+    });
+    service.startWindBot({ children: [] }, 'current', '新版', {
+        port: 2399,
+        runtimeDir: 'F:\\WindBot',
+    });
+
+    const encoded = Buffer.from('bedcbef8b7c3cecaa1a3', 'hex');
+    child.stderr.write(encoded.subarray(0, 1));
+    child.stderr.write(encoded.subarray(1));
+
+    assert.match(service.getWindBotOutput('current').output, /\[错误\] 拒绝访问。/);
+    assert.match(loggedOutput, /\[新版:错误\] 拒绝访问。/);
+    assert.doesNotMatch(loggedOutput, /�/);
 });
 
 test('rank forwarding posts the original report with the production access key', async (context) => {

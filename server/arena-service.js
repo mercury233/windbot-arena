@@ -488,16 +488,21 @@ class ArenaService extends EventEmitter {
             output: '',
             updatedAt: new Date().toISOString(),
         };
-        child.stdout.on('data', (data) => {
-            const output = data.toString('utf8');
-            this.appendWindBotOutput(name, output);
-            process.stdout.write(`[${label}] ${data}`);
-        });
-        child.stderr.on('data', (data) => {
-            const output = data.toString('utf8');
-            this.appendWindBotOutput(name, `[错误] ${output}`);
-            process.stderr.write(`[${label}:错误] ${data}`);
-        });
+        // .NET Framework WindBot 在 Windows 重定向输出时使用系统中文代码页，而不是 UTF-8。
+        const captureOutput = (stream, outputPrefix, logPrefix, destination) => {
+            const decoder = new TextDecoder('gbk');
+            const write = (output) => {
+                if (!output) {
+                    return;
+                }
+                this.appendWindBotOutput(name, `${outputPrefix}${output}`);
+                destination.write(`${logPrefix}${output}`);
+            };
+            stream.on('data', (data) => write(decoder.decode(data, { stream: true })));
+            stream.on('end', () => write(decoder.decode()));
+        };
+        captureOutput(child.stdout, '', `[${label}] `, process.stdout);
+        captureOutput(child.stderr, '[错误] ', `[${label}:错误] `, process.stderr);
         child.on('error', (error) => {
             child.startError = error;
             this.appendWindBotOutput(name, `\n[启动失败] ${error.message}\n`);
