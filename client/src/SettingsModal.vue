@@ -64,7 +64,7 @@ function save() {
             <n-tabs type="line" animated>
                 <n-tab-pane name="srvpro" tab="SRVPro">
                     <n-alert type="info" :bordered="false">
-                        该 SRVPro 应仅供 Arena 使用。每次测试都会主动重启它并清理现有房间。
+                        该 SRVPro 应仅供 Arena 使用。每次测试都会主动重启它并清理现有房间。不应进行测试之外的决斗以免干扰统计结果。
                     </n-alert>
                     <n-form label-placement="top" class="settings-form">
                         <div class="settings-grid">
@@ -173,7 +173,7 @@ function save() {
                             <n-form-item label="调度轮询间隔（毫秒）">
                                 <n-input-number v-model:value="draft.scheduler.pollMs" :min="100" :max="60000" />
                             </n-form-item>
-                            <n-form-item label="统计等待时间（分钟）">
+                            <n-form-item label="等待最后一批对局完成时间（分钟）">
                                 <n-input-number v-model:value="draft.scheduler.settleMinutes" :min="1" :max="1440" />
                             </n-form-item>
                         </div>

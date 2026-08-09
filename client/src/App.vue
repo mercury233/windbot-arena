@@ -176,8 +176,16 @@ const bulkDeckCount = computed(() => deckOptions.value.filter((item) => item.aiL
 const availableAiLevels = computed(() => [...new Set(
     deckOptions.value
         .map((option) => option.aiLevel)
-        .filter((level) => level !== null),
-)].sort((left, right) => right - left));
+        .filter((level) => Number.isInteger(level) || level === null),
+)].sort((left, right) => {
+    if (left === null) {
+        return 1;
+    }
+    if (right === null) {
+        return -1;
+    }
+    return right - left;
+}));
 const effectiveSelectedDeckSet = computed(() => {
     if (!allDecks.value) {
         return new Set(selectedDecks.value);
@@ -237,11 +245,8 @@ const progress = computed(() => {
     if (!run || run.totalGames === 0) {
         return 0;
     }
-    const launchedGames = Math.min(run.launchedGames || 0, run.totalGames);
     const observedGames = Math.min(run.observedGames || 0, run.totalGames);
-    return Math.min(100, Math.round(
-        ((launchedGames + observedGames * 2) / (run.totalGames * 3)) * 100,
-    ));
+    return Math.min(100, Math.round((observedGames / run.totalGames) * 100));
 });
 const totals = computed(() => {
     const result = [
@@ -675,13 +680,16 @@ function getRunElapsedMilliseconds(run) {
 
 function formatHistoryTitle(run) {
     const label = runKindLabels[run.kind] || run.kind;
+    const matchupCount = run.matchupCount ?? run.matchups?.length ?? 0;
     if (run.kind === 'challenge') {
-        return `${label} · ${run.config?.targetDeck || '—'} VS ${run.matchupCount} 个卡组`;
+        const version = run.config?.challengerVersion === 'old' ? '旧版' : '新版';
+        return `${label} · ${version} ${run.config?.targetDeck || '—'} VS ${matchupCount} 个卡组`;
     }
-    if (run.kind === 'regression' && run.matchupCount === 1 && run.deckName) {
-        return `${label} · ${run.deckName} · 1 个卡组`;
+    const deckName = run.deckName || run.matchups?.[0]?.label;
+    if (run.kind === 'regression' && matchupCount === 1 && deckName) {
+        return `${label} · ${deckName} · 1 个卡组`;
     }
-    return `${label} · ${run.matchupCount} 个卡组`;
+    return `${label} · ${matchupCount} 个卡组`;
 }
 
 async function writeClipboard(text) {
@@ -726,7 +734,7 @@ async function copyResults() {
         `任务 ID：${run.id}`,
         `状态：${statusLabels[run.status] || run.status}`,
         `创建时间：${formatDate(run.createdAt)}`,
-        `已统计对局：${run.observedGames}`,
+        `已完成对局：${run.observedGames}`,
         `已创建对局：${run.launchedGames}${run.kind !== 'ranking' ? ` / ${run.totalGames}` : ''}`,
     ];
     if (run.kind === 'ranking') {
@@ -1096,13 +1104,13 @@ onBeforeUnmount(() => {
                                     <span class="ai-level-controls">
                                         <n-checkbox
                                             v-for="aiLevel in availableAiLevels"
-                                            :key="aiLevel"
+                                            :key="aiLevel ?? 'ungraded'"
                                             :checked="isAiLevelSelected(aiLevel)"
                                             :indeterminate="isAiLevelIndeterminate(aiLevel)"
                                             :disabled="!!activeRun"
                                             @update:checked="handleAiLevelSelection(aiLevel, $event)"
                                         >
-                                            LV{{ aiLevel }}
+                                            {{ aiLevel === null ? '无分级' : `LV${aiLevel}` }}
                                         </n-checkbox>
                                     </span>
                                 </div>
@@ -1148,7 +1156,7 @@ onBeforeUnmount(() => {
                                             </n-tag>
                                         </div>
                                         <p class="results-meta">
-                                            {{ displayedRun.matchups.length }} 个卡组
+                                            {{ formatHistoryTitle(displayedRun) }}
                                             · <code>{{ displayedRun.id.slice(0, 8).toUpperCase() }}</code>
                                             · 创建于 {{ formatDate(displayedRun.createdAt) }}
                                         </p>
@@ -1160,27 +1168,28 @@ onBeforeUnmount(() => {
                             </div>
 
                             <div class="metric-grid">
-                                <div class="metric primary-metric">
-                                    <span>{{ displayedRun.kind !== 'ranking' ? '任务进度' : '已统计对局' }}</span>
+                                <div
+                                    class="metric primary-metric"
+                                    :class="{ 'has-progress': displayedRun.kind !== 'ranking' }"
+                                >
+                                    <span>{{ displayedRun.kind !== 'ranking' ? '任务进度' : '已完成对局' }}</span>
                                     <strong v-if="displayedRun.kind !== 'ranking'" class="progress-value">
-                                        {{ progress }}<small>%</small>
+                                        {{ displayedRun.observedGames }}<span> / {{ displayedRun.totalGames }}</span>
                                     </strong>
                                     <strong v-else>{{ displayedRun.observedGames }}</strong>
                                     <n-progress
                                         v-if="displayedRun.kind !== 'ranking'"
                                         type="line"
                                         :percentage="progress"
-                                        :height="5"
-                                        :show-indicator="false"
+                                        indicator-placement="inside"
+                                        :indicator-text-color="darkMode ? '#dfeaed' : '#102a32'"
+                                        :height="18"
                                         :border-radius="0"
                                     />
                                 </div>
                                 <div class="metric">
-                                    <span>{{ displayedRun.kind !== 'ranking' ? '已创建 / 计划' : '已创建对局' }}</span>
-                                    <strong>
-                                        {{ displayedRun.launchedGames }}
-                                        <small v-if="displayedRun.kind !== 'ranking'"> / {{ displayedRun.totalGames }}</small>
-                                    </strong>
+                                    <span>已创建对局</span>
+                                    <strong>{{ displayedRun.launchedGames }}</strong>
                                 </div>
                                 <div class="metric">
                                     <span v-if="displayedRun.kind === 'ranking'">当前榜首</span>

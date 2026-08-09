@@ -715,9 +715,18 @@ input {
     color: #63e6d3;
 }
 
+.primary-metric.has-progress {
+    padding-bottom: 9px;
+}
+
 .primary-metric .progress-value {
     font-size: 18px;
     line-height: 1;
+    white-space: nowrap;
+}
+
+.primary-metric .progress-value span {
+    color: #dfeaed;
 }
 
 .primary-metric .n-progress {
@@ -1082,6 +1091,10 @@ html[data-theme='light'] body .instance-heading h3 {
     color: #102a32;
 }
 
+[data-theme='light'] .primary-metric .progress-value span {
+    color: #102a32;
+}
+
 [data-theme='light'] .live-state,
 [data-theme='light'] .theme-control,
 [data-theme='light'] .hero-copy p,
@@ -1362,6 +1375,10 @@ html[data-theme='light'] body .instance-heading span {
 
     .metric strong {
         font-size: 20px;
+    }
+
+    .primary-metric.has-progress {
+        padding-bottom: 0;
     }
 
     .launch-actions {

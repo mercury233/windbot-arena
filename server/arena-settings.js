@@ -98,7 +98,7 @@ function validateAndMergeArenaSettings(input, existing) {
             pairDelayMs: readInteger(input.scheduler?.pairDelayMs, '双方加入间隔', 0, 60000),
             pairsPerTick: readInteger(input.scheduler?.pairsPerTick, '每轮创建对局数', 1, 100),
             pollMs: readInteger(input.scheduler?.pollMs, '调度轮询间隔', 100, 60000),
-            settleMinutes: readInteger(input.scheduler?.settleMinutes, '统计等待时间', 1, 1440),
+            settleMinutes: readInteger(input.scheduler?.settleMinutes, '等待最后一批对局完成时间', 1, 1440),
         },
         srvpro: {
             duelPort: readInteger(srvpro.duelPort, 'SRVPro 对战端口', 1, 65535),
