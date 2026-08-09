@@ -85,6 +85,7 @@ let clockTimer;
 let inspectorTimer;
 let refreshing;
 let revisionIndexes;
+let runSelectionRequest = 0;
 const pendingRefreshDomains = new Set();
 let recentDecksValidated = false;
 const historyPageSize = 10;
@@ -207,7 +208,7 @@ const allDeckCount = computed(() => {
     ));
     return bulkDeckCount.value + (included ? 0 : 1);
 });
-const displayedRun = computed(() => activeRun.value || selectedRun.value);
+const displayedRun = computed(() => selectedRun.value);
 const historyPageCount = computed(() => Math.max(1, Math.ceil(
     historyTotal.value / historyPageSize,
 )));
@@ -355,6 +356,24 @@ async function api(path, options) {
     return body;
 }
 
+async function applyRunConfiguration(run) {
+    experimentKind.value = run.kind;
+    await nextTick();
+    allDecks.value = run.config?.selection === 'all';
+    selectedDecks.value = run.matchups.map((matchup) => matchup.label);
+    targetDeck.value = run.kind === 'challenge' ? run.config?.targetDeck || '' : '';
+    challengerVersion.value = run.kind === 'challenge'
+        ? run.config?.challengerVersion || 'current'
+        : 'current';
+    if (run.gamesPerMatchup > 0) {
+        if (run.kind === 'challenge') {
+            challengeGamesPerMatchup.value = run.gamesPerMatchup;
+        } else if (run.kind === 'regression') {
+            gamesPerMatchup.value = run.gamesPerMatchup;
+        }
+    }
+}
+
 async function refresh(domains = allRefreshDomains) {
     domains.forEach((domain) => pendingRefreshDomains.add(domain));
     if (refreshing) {
@@ -384,20 +403,23 @@ async function refresh(domains = allRefreshDomains) {
             }
             if (responses.active) {
                 const previousActiveId = activeRun.value?.id;
-                activeRun.value = responses.active.run;
-                if (responses.active.run) {
-                    experimentKind.value = responses.active.run.kind;
-                    if (responses.active.run.kind === 'challenge') {
-                        challengerVersion.value = responses.active.run.config?.challengerVersion || 'current';
+                const selectedRunId = selectedRun.value?.id;
+                const nextActiveRun = responses.active.run;
+                activeRun.value = nextActiveRun;
+                if (nextActiveRun) {
+                    if (!selectedRunId || selectedRunId === nextActiveRun.id) {
+                        selectedRun.value = nextActiveRun;
+                        await applyRunConfiguration(nextActiveRun);
                     }
-                    selectedRun.value = responses.active.run;
-                } else if (previousActiveId) {
+                } else if (previousActiveId && selectedRunId === previousActiveId) {
                     const latest = await api(`/api/runs/${previousActiveId}`).catch(() => null);
                     selectedRun.value = latest?.run || null;
                 }
             }
             if (!activeRun.value && !selectedRun.value && runs.value.length > 0) {
-                selectedRun.value = (await api(`/api/runs/${runs.value[0].id}`)).run;
+                const initialRun = (await api(`/api/runs/${runs.value[0].id}`)).run;
+                selectedRun.value = initialRun;
+                await applyRunConfiguration(initialRun);
             }
         }
     })().finally(() => {
@@ -433,30 +455,18 @@ function handleRevisionEvent(event) {
 }
 
 async function selectRun(runId) {
+    const request = ++runSelectionRequest;
     try {
         const run = (await api(`/api/runs/${runId}`)).run;
-        selectedRun.value = run;
-        if (activeRun.value) {
+        if (request !== runSelectionRequest) {
             return;
         }
-
-        experimentKind.value = run.kind;
-        await nextTick();
-        allDecks.value = run.config?.selection === 'all';
-        selectedDecks.value = run.matchups.map((matchup) => matchup.label);
-        targetDeck.value = run.kind === 'challenge' ? run.config?.targetDeck || '' : '';
-        challengerVersion.value = run.kind === 'challenge'
-            ? run.config?.challengerVersion || 'current'
-            : 'current';
-        if (run.gamesPerMatchup > 0) {
-            if (run.kind === 'challenge') {
-                challengeGamesPerMatchup.value = run.gamesPerMatchup;
-            } else if (run.kind === 'regression') {
-                gamesPerMatchup.value = run.gamesPerMatchup;
-            }
-        }
+        selectedRun.value = run;
+        await applyRunConfiguration(run);
     } catch (error) {
-        message.error(error.message);
+        if (request === runSelectionRequest) {
+            message.error(error.message);
+        }
     }
 }
 
@@ -599,6 +609,7 @@ async function startRun() {
                 // 最近选择仍会保留到当前页面关闭。
             }
         }
+        runSelectionRequest += 1;
         activeRun.value = body.run;
         selectedRun.value = body.run;
         historyPage.value = 1;
@@ -992,6 +1003,13 @@ onBeforeUnmount(() => {
                                         <div class="results-title-line">
                                             <h2>{{ runKindLabels[experimentKind] }}</h2>
                                             <n-tag v-if="!activeRun" size="small">可创建</n-tag>
+                                            <n-tag
+                                                v-else-if="displayedRun?.id !== activeRun.id"
+                                                size="small"
+                                                type="warning"
+                                            >
+                                                历史
+                                            </n-tag>
                                         </div>
                                         <p>{{ runKindDescriptions[experimentKind] }}</p>
                                     </div>
@@ -1456,7 +1474,10 @@ onBeforeUnmount(() => {
         <footer>
             <span>WINDBOT ARENA / SELF-HOSTED CONTROL PLANE</span>
             <div class="footer-status">
-                <span>最近收到数据：{{ formatDate(displayedRun?.latestRankAt, true) }}</span>
+                <span>
+                    {{ activeRun ? '活动任务数据' : '当前详情数据' }}：
+                    {{ formatDate((activeRun || displayedRun)?.latestRankAt, true) }}
+                </span>
                 <div class="live-state" :class="{ connected: liveConnected }" role="status">
                     <span class="live-dot"></span>
                     {{ liveConnected ? '实时数据已连接' : '正在重新连接' }}

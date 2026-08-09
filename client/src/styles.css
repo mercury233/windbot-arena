@@ -895,8 +895,23 @@ input {
 .status-running,
 .status-preparing,
 .status-settling {
+    --status-pulse-color: 99, 230, 211;
     background: #63e6d3;
-    box-shadow: 0 0 8px rgba(99, 230, 211, 0.4);
+    animation: history-status-pulse 1.8s ease-out infinite;
+}
+
+@keyframes history-status-pulse {
+    0% {
+        box-shadow:
+            0 0 6px rgba(var(--status-pulse-color), 0.32),
+            0 0 0 0 rgba(var(--status-pulse-color), 0.38);
+    }
+
+    100% {
+        box-shadow:
+            0 0 6px rgba(var(--status-pulse-color), 0.32),
+            0 0 0 6px rgba(var(--status-pulse-color), 0);
+    }
 }
 
 .status-completed {
@@ -1125,6 +1140,7 @@ html[data-theme='light'] body .instance-heading h3 {
 [data-theme='light'] .status-running,
 [data-theme='light'] .status-preparing,
 [data-theme='light'] .status-settling {
+    --status-pulse-color: 22, 148, 135;
     background: #169487;
 }
 
@@ -1250,6 +1266,15 @@ html[data-theme='light'] body .instance-heading span {
 
     .history-panel {
         grid-row: span 2;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .status-running,
+    .status-preparing,
+    .status-settling {
+        animation: none;
+        box-shadow: 0 0 8px rgba(var(--status-pulse-color), 0.4);
     }
 }
 
