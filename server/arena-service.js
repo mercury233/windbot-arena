@@ -476,11 +476,11 @@ class ArenaService {
                 throw new Error('无限测试的调度意外结束');
             }
             this.database.setRunStatus(context.id, 'settling');
-            this.database.addEvent(context.id, 'info', 'settling', '对局已全部创建，正在等待排行统计');
+            this.database.addEvent(context.id, 'info', 'settling', '对局已全部创建，正在等待决斗完成');
             this.markChanged('settling');
             const fullyObserved = await this.waitForResults(context);
             if (!fullyObserved) {
-                this.database.addEvent(context.id, 'warning', 'settle-timeout', '等待排行统计超时，已保留现有结果');
+                this.database.addEvent(context.id, 'warning', 'settle-timeout', '等待决斗完成超时，已保留现有结果');
             }
             await this.finish(context, 'completed', '测试已完成');
         } catch (error) {

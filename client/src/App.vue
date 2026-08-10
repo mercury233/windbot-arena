@@ -1289,9 +1289,9 @@ onBeforeUnmount(() => {
                                             <td
                                                 class="deck-win-rate"
                                                 :class="{
-                                                    'is-significant-win': matchup.observedGames > 100
+                                                    'is-significant-win': matchup.observedGames >= 100
                                                         && matchup.currentWinRate > 0.55,
-                                                    'is-significant-loss': matchup.observedGames > 100
+                                                    'is-significant-loss': matchup.observedGames >= 100
                                                         && matchup.currentWinRate < 0.45,
                                                 }"
                                             >
