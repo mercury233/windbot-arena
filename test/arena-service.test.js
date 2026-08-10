@@ -674,6 +674,45 @@ test('challenge run defaults to 100 games per opponent and has a finite total', 
     assert.equal(persistedRun.matchups[0].competitors[1].endpointHost, 'current.lan');
 });
 
+test('run context keeps persisted matchup ids aligned when stored rows are sorted', () => {
+    const settings = createDefaultArenaSettings();
+    Object.assign(settings.srvpros[0], {
+        host: 'srvpro.lan',
+        password: 'secret',
+        username: 'arena',
+    });
+    Object.assign(settings.windbots.current, {
+        botConfText: [
+            '!Alpha',
+            'Name=Alpha Deck=Alpha Dialog=default',
+            '!Beta',
+            'Name=Beta Deck=Beta Dialog=default',
+        ].join('\n'),
+        host: 'current.lan',
+        mode: 'remote',
+    });
+    const service = new ArenaService({}, {
+        createRun(run) {
+            return {
+                ...run,
+                matchups: [
+                    { ...run.matchups[1], id: 202 },
+                    { ...run.matchups[0], id: 101 },
+                ],
+            };
+        },
+        getArenaSettings: () => ({ settings }),
+    });
+    service.execute = async () => {};
+
+    service.createRun({ decks: ['Beta', 'Alpha'], kind: 'ranking' });
+
+    assert.deepEqual(
+        service.contexts.get('srvpro-1').matchups.map((matchup) => [matchup.label, matchup.id]),
+        [['Beta', 101], ['Alpha', 202]],
+    );
+});
+
 test('different SRVPro instances can run concurrently while each instance stays exclusive', () => {
     const settings = createDefaultArenaSettings();
     Object.assign(settings.srvpros[0], {

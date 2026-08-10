@@ -481,6 +481,9 @@ class ArenaService {
             matchups,
             srvproId,
         });
+        const storedMatchupsByLabel = new Map(
+            stored.matchups.map((matchup) => [matchup.label, matchup]),
+        );
 
         const context = {
             abortController: new AbortController(),
@@ -490,9 +493,9 @@ class ArenaService {
             id,
             kind,
             latestObserved: new Map(),
-            matchups: matchups.map((matchup, index) => ({
+            matchups: matchups.map((matchup) => ({
                 ...matchup,
-                id: stored.matchups[index].id,
+                id: storedMatchupsByLabel.get(matchup.label).id,
                 launchedGames: 0,
             })),
             nextMatchupIndex: 0,
