@@ -21,7 +21,7 @@ function createApp(config, database, arenaService, shutdownSignal) {
 
     app.get('/api/srvpro/rooms', async (request, response, next) => {
         try {
-            response.json(await arenaService.listRooms());
+            response.json(await arenaService.listRooms(request.query.srvproId));
         } catch (error) {
             next(error);
         }
@@ -76,8 +76,9 @@ function createApp(config, database, arenaService, shutdownSignal) {
     });
 
     app.get('/api/runs/active', (request, response) => {
-        const active = database.findActiveRun();
-        response.json({ run: active ? database.getRun(active.id) : null });
+        response.json({
+            runs: database.findActiveRuns().map((run) => database.getRun(run.id)),
+        });
     });
 
     app.get('/api/runs/:id', (request, response) => {

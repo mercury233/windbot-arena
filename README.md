@@ -28,7 +28,7 @@ npm.cmd run build
 npm.cmd start
 ```
 
-打开 `http://127.0.0.1:3000`，进入“系统配置”填写 SRVPro、两套 WindBot 和调度参数。不再使用 `settings.js` 或配置示例文件。
+打开 `http://127.0.0.1:3000`，进入“系统配置”填写一个或多个 SRVPro 实例、两套 WindBot 和调度参数。不再使用 `settings.js` 或配置示例文件。
 
 服务启动只读取三个基础环境变量：
 
@@ -50,7 +50,7 @@ npm.cmd run dev
 
 所有业务配置都存储在 SQLite 的 `arena_settings` 表中，包括：
 
-- SRVPro 地址、端口、管理凭据和容量限制；
+- 各 SRVPro 实例的名称、地址、端口、管理凭据和容量限制；
 - 新版与旧版 WindBot 的运行模式、HTTP 端点和 `bot.conf`；
 - 对局创建速度、轮询间隔和统计等待时间。
 
@@ -58,7 +58,7 @@ npm.cmd run dev
 
 ### 本地 WindBot
 
-本地模式由 Arena 启动并在任务结束时关闭 `WindBot.exe`。需要配置：
+本地模式由 Arena 启动 `WindBot.exe`。并行任务共享同一套本地进程，最后一个任务结束时由 Arena 关闭。需要配置：
 
 - WindBot 运行目录；
 - `bot.conf` 路径；
@@ -94,7 +94,7 @@ SRVPro 需要启用 `modules.private_duel.record_match_scores`，管理账号需
 
 界面中的“新版胜率”按 `新版胜场 /（新版胜场 + 旧版胜场）` 计算。正常完成的对局中它与新版自身的胜负统计一致；逃跑作为异常计数单独展示，不再提供含义高度重叠的第二个胜率指标。“已完成对局”只按 `win + lose` 计算，`flee` 不会额外增加完成局数。
 
-配置中的 SRVPro 是 Arena 专用实例。每次测试会直接调用管理接口重启服务并清理其房间，无需保护其他业务房间。
+配置中的每个 SRVPro 都是 Arena 专用实例。创建任务时需要选择一个实例；同一实例只允许一个活动任务，不同实例可以并行运行。每次测试会直接调用所选实例的管理接口重启服务并清理其房间，无需保护其他业务房间。
 
 ## NAS 与专属域名
 
@@ -113,13 +113,13 @@ SRVPro 需要启用 `modules.private_duel.record_match_scores`，管理账号需
 默认数据库位于 `data/arena.sqlite`，启用 WAL。主要数据包括：
 
 - `arena_settings`：唯一一份当前系统配置；
-- `runs`：实验类型、状态、计划和时间；
+- `runs`：实验使用的 SRVPro 实例、类型、状态、计划和时间；
 - `matchups`：实验中的独立卡组统计项；
 - `competitors`：双方来源、卡组、运行模式、端点和统计；
 - `rank_reports`：SRVPro 原始排行快照；
 - `run_events`：准备、调度、停止和错误等关键事件。
 
-项目处于积极开发阶段，不提供数据库升级兼容层。开发期修改表结构后，应使用新库重新开始；确有需要的数据只做一次性手动迁移。
+项目处于积极开发阶段，不提供通用数据库升级兼容层。多 SRVPro 功能只包含一次性的旧 `srvpro` 配置转换；开发期其他表结构修改后，应使用新库重新开始。
 
 ## 项目结构
 

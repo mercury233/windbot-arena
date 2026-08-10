@@ -13,6 +13,7 @@ import {
     NProgress,
     NRadioButton,
     NRadioGroup,
+    NSelect,
     NSpin,
     NSwitch,
     NTag,
@@ -40,8 +41,9 @@ const system = ref(null);
 const runs = ref([]);
 const historyPage = ref(1);
 const historyTotal = ref(0);
-const activeRun = ref(null);
+const activeRuns = ref([]);
 const selectedRun = ref(null);
+const selectedSrvproId = ref('');
 const recentDecks = ref(storedRecentDecks);
 const selectedDecks = ref([...storedRecentDecks]);
 const allDecks = ref(false);
@@ -212,8 +214,41 @@ const displayedRun = computed(() => selectedRun.value);
 const historyPageCount = computed(() => Math.max(1, Math.ceil(
     historyTotal.value / historyPageSize,
 )));
+const selectedSrvpro = computed(() => (
+    system.value?.srvpros.find((srvpro) => srvpro.id === selectedSrvproId.value) || null
+));
+const selectedSrvproDisplay = computed(() => (
+    selectedSrvpro.value
+        ? `${selectedSrvpro.value.name} · ${selectedSrvpro.value.host}:${selectedSrvpro.value.duelPort}`
+        : '—'
+));
+const activeRun = computed(() => (
+    activeRuns.value.find((run) => run.srvproId === selectedSrvproId.value) || null
+));
+const launchPanelState = computed(() => {
+    if (
+        activeRun.value
+        && displayedRun.value?.id !== activeRun.value.id
+        && terminalStatuses.has(displayedRun.value?.status)
+    ) {
+        return 'terminal';
+    }
+    return activeRun.value ? 'running' : 'ready';
+});
+const terminalRunActionLabel = computed(() => (
+    `任务${statusLabels[displayedRun.value?.status] || '已结束'}`
+));
+const hasActiveRuns = computed(() => activeRuns.value.length > 0);
+const srvproOptions = computed(() => (system.value?.srvpros || []).map((srvpro) => {
+    const busy = activeRuns.value.some((run) => run.srvproId === srvpro.id);
+    return {
+        disabled: busy,
+        label: `${srvpro.name} — ${srvpro.host || '未配置'}:${srvpro.duelPort}${busy ? '（运行中）' : ''}`,
+        value: srvpro.id,
+    };
+}));
 const modeConfiguration = computed(() => (
-    system.value?.configuration.modes?.[
+    system.value?.configurationBySrvpro?.[selectedSrvproId.value]?.modes?.[
         experimentKind.value === 'challenge' && challengerVersion.value === 'old'
             ? 'challengeOld'
             : experimentKind.value
@@ -223,11 +258,11 @@ const modeConfiguration = computed(() => (
 const configurationReady = computed(() => modeConfiguration.value.valid === true);
 const inspectorTitle = computed(() => (
     inspectorKind.value === 'srvpro'
-        ? `SRVPro 房间列表（${inspectorRooms.value.length}）`
+        ? `${selectedSrvpro.value?.name || 'SRVPro'} 房间列表（${inspectorRooms.value.length}）`
         : `${inspectorKind.value === 'current' ? '新版' : '旧版'} WindBot 命令行输出`
 ));
 const canStart = computed(() => {
-    if (!configurationReady.value || activeRun.value) {
+    if (!selectedSrvpro.value || !configurationReady.value || activeRun.value) {
         return false;
     }
     const selectedCount = allDecks.value ? bulkDeckCount.value : new Set(selectedDecks.value).size;
@@ -359,6 +394,9 @@ async function api(path, options) {
 async function applyRunConfiguration(run) {
     experimentKind.value = run.kind;
     await nextTick();
+    if (system.value?.srvpros.some((srvpro) => srvpro.id === run.srvproId)) {
+        selectedSrvproId.value = run.srvproId;
+    }
     allDecks.value = run.config?.selection === 'all';
     selectedDecks.value = run.matchups.map((matchup) => matchup.label);
     targetDeck.value = run.kind === 'challenge' ? run.config?.targetDeck || '' : '';
@@ -396,27 +434,31 @@ async function refresh(domains = allRefreshDomains) {
             })));
             if (responses.system) {
                 system.value = responses.system;
+                if (!system.value.srvpros.some((srvpro) => srvpro.id === selectedSrvproId.value)) {
+                    selectedSrvproId.value = system.value.srvpros[0]?.id || '';
+                }
             }
             if (responses.runs) {
                 runs.value = responses.runs.runs;
                 historyTotal.value = responses.runs.total;
             }
             if (responses.active) {
-                const previousActiveId = activeRun.value?.id;
+                const previousActiveIds = new Set(activeRuns.value.map((run) => run.id));
                 const selectedRunId = selectedRun.value?.id;
-                const nextActiveRun = responses.active.run;
-                activeRun.value = nextActiveRun;
-                if (nextActiveRun) {
-                    if (!selectedRunId || selectedRunId === nextActiveRun.id) {
-                        selectedRun.value = nextActiveRun;
-                        await applyRunConfiguration(nextActiveRun);
-                    }
-                } else if (previousActiveId && selectedRunId === previousActiveId) {
-                    const latest = await api(`/api/runs/${previousActiveId}`).catch(() => null);
+                const nextActiveRuns = responses.active.runs;
+                activeRuns.value = nextActiveRuns;
+                const selectedActiveRun = nextActiveRuns.find((run) => run.id === selectedRunId);
+                if (selectedActiveRun) {
+                    selectedRun.value = selectedActiveRun;
+                } else if (selectedRunId && previousActiveIds.has(selectedRunId)) {
+                    const latest = await api(`/api/runs/${selectedRunId}`).catch(() => null);
                     selectedRun.value = latest?.run || null;
+                } else if (!selectedRun.value && nextActiveRuns.length > 0) {
+                    selectedRun.value = nextActiveRuns[0];
+                    await applyRunConfiguration(nextActiveRuns[0]);
                 }
             }
-            if (!activeRun.value && !selectedRun.value && runs.value.length > 0) {
+            if (!selectedRun.value && runs.value.length > 0) {
                 const initialRun = (await api(`/api/runs/${runs.value[0].id}`)).run;
                 selectedRun.value = initialRun;
                 await applyRunConfiguration(initialRun);
@@ -470,6 +512,14 @@ async function selectRun(runId) {
     }
 }
 
+function selectSrvpro(srvproId) {
+    if (activeRuns.value.some((run) => run.srvproId === srvproId)) {
+        return;
+    }
+    runSelectionRequest += 1;
+    selectedSrvproId.value = srvproId;
+}
+
 function selectHistoryPage(page) {
     historyPage.value = page;
     refresh(['runs']).catch((error) => message.error(error.message));
@@ -491,7 +541,7 @@ async function loadInspector(silent = false) {
     }
     try {
         const body = kind === 'srvpro'
-            ? await api('/api/srvpro/rooms')
+            ? await api(`/api/srvpro/rooms?srvproId=${encodeURIComponent(selectedSrvproId.value)}`)
             : await api(`/api/windbots/${kind}/output`);
         if (kind !== inspectorKind.value || !inspectorOpen.value) {
             return;
@@ -586,6 +636,7 @@ async function startRun() {
         const request = {
             decks: requestedDecks,
             kind: experimentKind.value,
+            srvproId: selectedSrvproId.value,
         };
         if (experimentKind.value === 'regression') {
             request.gamesPerMatchup = gamesPerMatchup.value;
@@ -610,7 +661,10 @@ async function startRun() {
             }
         }
         runSelectionRequest += 1;
-        activeRun.value = body.run;
+        activeRuns.value = [
+            body.run,
+            ...activeRuns.value.filter((run) => run.id !== body.run.id),
+        ];
         selectedRun.value = body.run;
         historyPage.value = 1;
         message.success(`${runKindLabels[experimentKind.value]}已创建`);
@@ -939,7 +993,9 @@ onBeforeUnmount(() => {
                                 </svg>
                             </button>
                         </div>
-                        <strong>{{ system ? `${system.srvpro.host}:${system.srvpro.duelPort}` : '—' }}</strong>
+                        <strong :title="selectedSrvpro ? selectedSrvproDisplay : undefined">
+                            {{ selectedSrvproDisplay }}
+                        </strong>
                     </div>
                     <div>
                         <div class="readout-heading">
@@ -1017,6 +1073,18 @@ onBeforeUnmount(() => {
                             </div>
 
                             <div class="launch-form">
+                                <label
+                                    v-if="system?.srvpros.length > 1"
+                                    class="field field-wide srvpro-field"
+                                >
+                                    <span>SRVPro 实例</span>
+                                    <n-select
+                                        :value="selectedSrvproId"
+                                        :options="srvproOptions"
+                                        placeholder="选择本次任务使用的 SRVPro"
+                                        @update:value="selectSrvpro"
+                                    />
+                                </label>
                                 <div v-if="experimentKind === 'challenge'" class="challenge-target-row">
                                     <label class="field target-deck-field">
                                         <span>挑战者卡组</span>
@@ -1030,7 +1098,7 @@ onBeforeUnmount(() => {
                                         />
                                     </label>
                                     <div class="field challenger-version-field">
-                                        <span>挑战者版本</span>
+                                        <span>挑战者 WindBot</span>
                                         <n-radio-group
                                             v-model:value="challengerVersion"
                                             :disabled="!!activeRun"
@@ -1059,7 +1127,7 @@ onBeforeUnmount(() => {
                                                 text
                                                 type="primary"
                                                 size="tiny"
-                                                :disabled="!!activeRun"
+                                                :disabled="hasActiveRuns"
                                                 :loading="refreshingDecks"
                                                 @click="refreshBotConfigs"
                                             >
@@ -1144,13 +1212,16 @@ onBeforeUnmount(() => {
                                         />
                                     </label>
                                     <n-button
-                                        v-if="!activeRun"
+                                        v-if="launchPanelState === 'ready'"
                                         type="primary"
                                         :disabled="!canStart"
                                         :loading="starting"
                                         @click="startRun"
                                     >
                                         启动{{ runKindLabels[experimentKind] }}
+                                    </n-button>
+                                    <n-button v-else-if="launchPanelState === 'terminal'" disabled>
+                                        {{ terminalRunActionLabel }}
                                     </n-button>
                                     <n-popconfirm v-else @positive-click="stopRun">
                                         <template #trigger>
@@ -1176,6 +1247,7 @@ onBeforeUnmount(() => {
                                         <p class="results-meta">
                                             {{ formatHistoryTitle(displayedRun) }}
                                             · <code>{{ displayedRun.id.slice(0, 8).toUpperCase() }}</code>
+                                            · {{ displayedRun.config?.srvproName || displayedRun.config?.duelServer || 'SRVPro' }}
                                             · 创建于 {{ formatDate(displayedRun.createdAt) }}
                                         </p>
                                     </div>
@@ -1475,8 +1547,8 @@ onBeforeUnmount(() => {
             <span>WINDBOT ARENA / SELF-HOSTED CONTROL PLANE</span>
             <div class="footer-status">
                 <span>
-                    {{ activeRun ? '活动任务数据' : '当前详情数据' }}：
-                    {{ formatDate((activeRun || displayedRun)?.latestRankAt, true) }}
+                    {{ hasActiveRuns ? `${activeRuns.length} 个活动任务` : '当前详情数据' }}：
+                    {{ formatDate(displayedRun?.latestRankAt, true) }}
                 </span>
                 <div class="live-state" :class="{ connected: liveConnected }" role="status">
                     <span class="live-dot"></span>
@@ -1487,7 +1559,7 @@ onBeforeUnmount(() => {
 
         <settings-modal
             v-model:show="settingsOpen"
-            :disabled="!!activeRun"
+            :disabled="hasActiveRuns"
             :record="settingsRecord"
             :saving="savingSettings"
             @save="saveSettings"

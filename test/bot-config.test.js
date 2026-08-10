@@ -244,8 +244,8 @@ test('ranking creates one current WindBot entry per selected deck', () => {
 
 test('current-only modes remain available when the old WindBot is not configured', () => {
     const settings = createDefaultArenaSettings();
-    settings.srvpro = {
-        ...settings.srvpro,
+    settings.srvpros[0] = {
+        ...settings.srvpros[0],
         host: 'srvpro.lan',
         password: 'password',
         username: 'admin',

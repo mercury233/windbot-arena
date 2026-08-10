@@ -316,9 +316,9 @@ function buildRankingEntries(settings, requestedDecks) {
     return entries;
 }
 
-function inspectConfiguration(settings) {
+function inspectConfiguration(settings, selectedSrvpro = settings.srvpro || settings.srvpros?.[0]) {
     const baseIssues = [];
-    const srvpro = settings.srvpro;
+    const srvpro = selectedSrvpro || {};
     for (const [label, value] of [
         ['SRVPro 地址', srvpro.host],
         ['SRVPro 管理账号', srvpro.username],

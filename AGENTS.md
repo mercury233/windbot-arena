@@ -1,6 +1,6 @@
 # WindBot Arena 项目说明
 
-WindBot Arena 是一个自托管的 Node.js 对战实验控制台。它通过网页管理实验，调用两套 WindBot Server 向专用 SRVPro 创建约战模式对局，主动查询 SRVPro 排行，并把配置、实验过程和统计保存到 SQLite。
+WindBot Arena 是一个自托管的 Node.js 对战实验控制台。它通过网页管理实验，调用两套 WindBot Server 向用户选择的专用 SRVPro 实例创建约战模式对局，主动查询对应 SRVPro 排行，并把配置、实验过程和统计保存到 SQLite。
 
 ## 技术结构
 
@@ -80,7 +80,7 @@ ORDER BY matchups.ai_level IS NULL, matchups.ai_level DESC, matchups.label;
 
 - 项目正在积极开发中，不要考虑可迁移性，不要编写兼容旧版、自动升级旧配置或升级旧数据库的代码。数据结构改变时直接修改当前初始迁移；最多对少量确有价值的配置做一次性手动迁移。
 - 用户在配置中提供的 SRVPro 仅用于本项目，可以随意连接、查询、重启和清理房间，不需要保护其中的其他任务。
-- 同一时间只运行一个实验，因为 SRVPro 排行、房间池和两套 WindBot 端点都是共享资源。
+- 同一个 SRVPro 实例同一时间只运行一个实验；不同 SRVPro 实例可以并行运行。两套 WindBot 端点由并行任务共享，本地 WindBot 进程应在最后一个活动任务结束后再清理。
 - 运行记录不得保存 SRVPro 管理密码；配置读取 API 也不得把它返回浏览器。
 - 本地模式启动的进程必须由 Arena 在任务结束、失败、停止或服务关闭时清理；远程模式的进程不归 Arena 管理。
 - NAS/反向代理部署保持同源 API。普通控制台应由反向代理保护；Arena 主动访问 SRVPro 管理端口查询排行，无需为此对外开放额外入口。

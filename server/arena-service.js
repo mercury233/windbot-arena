@@ -100,7 +100,8 @@ class ArenaService {
     constructor(runtimeConfig, database) {
         this.runtimeConfig = runtimeConfig;
         this.database = database;
-        this.current = null;
+        this.contexts = new Map();
+        this.localWindbots = new Map();
         this.revisions = {
             active: 0,
             runs: 0,
@@ -118,18 +119,25 @@ class ArenaService {
 
     inspectSystem() {
         const { settings } = this.database.getArenaSettings();
-        const inspection = inspectConfiguration(settings);
+        const configurationBySrvpro = Object.fromEntries(settings.srvpros.map((srvpro) => [
+            srvpro.id,
+            inspectConfiguration(settings, srvpro),
+        ]));
+        const inspection = configurationBySrvpro[settings.srvpros[0].id];
         return {
             botConfigFingerprints: this.getBotConfigFingerprints(settings),
             configuration: inspection,
+            configurationBySrvpro,
             endpoints: {
                 web: `http://${this.runtimeConfig.listenHost}:${this.runtimeConfig.listenPort}`,
             },
-            srvpro: {
-                duelPort: settings.srvpro.duelPort,
-                host: settings.srvpro.host,
-                statusPort: settings.srvpro.statusPort,
-            },
+            srvpros: settings.srvpros.map((srvpro) => ({
+                duelPort: srvpro.duelPort,
+                host: srvpro.host,
+                id: srvpro.id,
+                name: srvpro.name,
+                statusPort: srvpro.statusPort,
+            })),
             windbots: Object.fromEntries(
                 Object.entries(settings.windbots).map(([name, instance]) => [name, {
                     host: instance.mode === 'local' ? '127.0.0.1' : instance.host,
@@ -160,16 +168,29 @@ class ArenaService {
         return { ...this.revisions };
     }
 
-    async listRooms() {
+    getSrvpro(settings, srvproId) {
+        const srvpro = settings.srvpros.find((item) => item.id === srvproId);
+        if (!srvpro) {
+            throw requestError('SRVPro 实例不存在', 404);
+        }
+        return srvpro;
+    }
+
+    async listRooms(srvproId) {
         const { settings } = this.database.getArenaSettings();
+        const srvpro = this.getSrvpro(settings, srvproId || settings.srvpros[0].id);
         let rooms;
         try {
-            ({ rooms } = await this.fetchRooms(settings.srvpro));
+            ({ rooms } = await this.fetchRooms(srvpro));
         } catch (error) {
             throw requestError(`无法查询 SRVPro 房间: ${error.message}`, 502);
         }
         return {
             fetchedAt: new Date().toISOString(),
+            srvpro: {
+                id: srvpro.id,
+                name: srvpro.name,
+            },
             rooms: rooms.map((room) => ({
                 id: String(room.roomid ?? ''),
                 name: String(room.roomname ?? ''),
@@ -221,7 +242,7 @@ class ArenaService {
     }
 
     async updateSettings(input) {
-        if (this.current) {
+        if (this.contexts.size > 0) {
             throw requestError('测试运行期间不能修改系统配置', 409);
         }
         const record = this.database.getArenaSettings();
@@ -232,6 +253,9 @@ class ArenaService {
             throw requestError(error.message);
         }
         await this.fetchRemoteBotConfigs(settings);
+        if (this.contexts.size > 0) {
+            throw requestError('测试运行期间不能修改系统配置', 409);
+        }
         const saved = this.database.saveArenaSettings(settings);
         this.markChanged('settings');
         return getPublicArenaSettings(saved.settings, saved.updatedAt);
@@ -288,12 +312,15 @@ class ArenaService {
     }
 
     async refreshBotConfigs() {
-        if (this.current) {
+        if (this.contexts.size > 0) {
             throw requestError('测试运行期间不能刷新 bot.conf', 409);
         }
         const record = this.database.getArenaSettings();
         const settings = structuredClone(record.settings);
         const { changedCount, fetchedCount } = await this.fetchRemoteBotConfigs(settings);
+        if (this.contexts.size > 0) {
+            throw requestError('测试运行期间不能刷新 bot.conf', 409);
+        }
         if (fetchedCount > 0) {
             this.database.saveArenaSettings(settings);
         }
@@ -318,9 +345,6 @@ class ArenaService {
     }
 
     createRun(input = {}) {
-        if (this.current) {
-            throw requestError('已有测试正在运行，请先停止当前测试', 409);
-        }
         if (!input || typeof input !== 'object' || Array.isArray(input)) {
             throw requestError('测试配置必须是对象');
         }
@@ -359,7 +383,14 @@ class ArenaService {
         }
 
         const { settings } = this.database.getArenaSettings();
-        const modeConfiguration = inspectConfiguration(settings).modes[
+        const srvproId = typeof input.srvproId === 'string' && input.srvproId.trim()
+            ? input.srvproId.trim()
+            : settings.srvpros[0].id;
+        const srvpro = this.getSrvpro(settings, srvproId);
+        if (this.contexts.has(srvproId)) {
+            throw requestError(`${srvpro.name} 已有测试正在运行`, 409);
+        }
+        const modeConfiguration = inspectConfiguration(settings, srvpro).modes[
             kind === 'challenge' && challengerVersion === 'old' ? 'challengeOld' : kind
         ];
         if (!modeConfiguration.valid) {
@@ -388,7 +419,9 @@ class ArenaService {
         const stored = this.database.createRun({
             config: {
                 ...(kind === 'challenge' ? { challengerVersion } : {}),
-                duelServer: `${settings.srvpro.host}:${settings.srvpro.duelPort}`,
+                duelServer: `${srvpro.host}:${srvpro.duelPort}`,
+                srvproId,
+                srvproName: srvpro.name,
                 windbots: Object.fromEntries(
                     Object.entries(settings.windbots).map(([name, instance]) => [name, {
                         endpoint: `${instance.mode === 'local' ? '127.0.0.1' : instance.host}:${instance.port}`,
@@ -403,12 +436,12 @@ class ArenaService {
             id,
             kind,
             matchups,
+            srvproId,
         });
 
         const context = {
             abortController: new AbortController(),
             challengerVersion,
-            children: [],
             finished: false,
             gamesPerMatchup,
             id,
@@ -424,11 +457,15 @@ class ArenaService {
                 PRIVATE_DUEL_ROOM_MIN,
                 PRIVATE_DUEL_ROOM_MAX + 1,
             ),
-            settings,
+            settings: {
+                srvpro: structuredClone(srvpro),
+                windbots: structuredClone(settings.windbots),
+            },
+            srvproId,
             stopReason: null,
             totalGames: kind === 'ranking' ? 0 : matchups.length * gamesPerMatchup,
         };
-        this.current = context;
+        this.contexts.set(srvproId, context);
         this.markChanged('created');
         context.done = this.execute(context);
         return stored;
@@ -456,9 +493,6 @@ class ArenaService {
             }
             const readiness = instances.map(([name, label, instance]) => {
                 const endpointHost = instance.mode === 'local' ? '127.0.0.1' : instance.host;
-                const child = instance.mode === 'local'
-                    ? this.startWindBot(context, name, label, instance)
-                    : null;
                 if (instance.mode === 'remote') {
                     this.database.addEvent(
                         context.id,
@@ -467,8 +501,9 @@ class ArenaService {
                         `${label}使用远程 WindBot ${endpointHost}:${instance.port}`,
                     );
                     this.markChanged('run-event');
+                    return this.waitForWindBot(label, endpointHost, instance.port, null, signal);
                 }
-                return this.waitForWindBot(label, endpointHost, instance.port, child, signal);
+                return this.ensureWindBot(name, label, instance, signal);
             });
             await Promise.all(readiness);
 
@@ -506,7 +541,15 @@ class ArenaService {
         }
     }
 
-    startWindBot(context, name, label, instance) {
+    ensureWindBot(name, label, instance, signal) {
+        let child = this.localWindbots.get(name);
+        if (!child || child.exitCode !== null || child.startError || child.stopping) {
+            child = this.startWindBot(name, label, instance);
+        }
+        return this.waitForWindBot(label, '127.0.0.1', instance.port, child, signal);
+    }
+
+    startWindBot(name, label, instance) {
         const child = childProcess.spawn(path.join(instance.runtimeDir, 'WindBot.exe'), [
             'ServerMode=True',
             `ServerPort=${instance.port}`,
@@ -517,7 +560,7 @@ class ArenaService {
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
         });
-        context.children.push(child);
+        this.localWindbots.set(name, child);
         this.windbotOutputs[name] = {
             active: true,
             output: '',
@@ -543,11 +586,23 @@ class ArenaService {
             this.appendWindBotOutput(name, `\n[启动失败] ${error.message}\n`);
         });
         child.on('exit', (code, signal) => {
-            this.windbotOutputs[name].active = false;
-            this.appendWindBotOutput(name, `\n[进程已退出] code=${code}, signal=${signal || 'none'}\n`);
+            if (this.localWindbots.get(name) === child) {
+                this.windbotOutputs[name].active = false;
+                this.localWindbots.delete(name);
+                this.appendWindBotOutput(name, `\n[进程已退出] code=${code}, signal=${signal || 'none'}\n`);
+            }
             console.log(`[${label}] WindBot 已退出: code=${code}, signal=${signal}`);
         });
         return child;
+    }
+
+    stopLocalWindBots() {
+        for (const child of this.localWindbots.values()) {
+            if (child.exitCode === null && !child.stopping) {
+                child.stopping = true;
+                child.kill();
+            }
+        }
     }
 
     async waitForWindBot(label, host, port, child, signal) {
@@ -623,10 +678,17 @@ class ArenaService {
                 win: score.win,
             }];
         });
-        if (signal && (signal.aborted || context.finished || this.current !== context)) {
+        if (
+            signal
+            && (
+                signal.aborted
+                || context.finished
+                || this.contexts.get(context.srvproId) !== context
+            )
+        ) {
             return;
         }
-        this.receiveRank(rank);
+        this.receiveRank(context, rank);
     }
 
     recordScorePollError(context, error) {
@@ -641,7 +703,11 @@ class ArenaService {
 
     async pollScores(context, intervalMs = SCORE_POLL_MS) {
         const { signal } = context.abortController;
-        while (!signal.aborted && !context.finished && this.current === context) {
+        while (
+            !signal.aborted
+            && !context.finished
+            && this.contexts.get(context.srvproId) === context
+        ) {
             try {
                 await this.queryScores(context, signal);
             } catch (error) {
@@ -979,14 +1045,9 @@ class ArenaService {
         return false;
     }
 
-    receiveRank(rank) {
+    receiveRank(context, rank) {
         const normalized = normalizeRank(rank);
-        const context = this.current;
-        const receivedAt = this.database.recordRank(context?.id || null, normalized, rank);
-        if (!context) {
-            this.markChanged('rank');
-            return { matchedRunId: null, receivedAt };
-        }
+        const receivedAt = this.database.recordRank(context.id, normalized, rank);
 
         const rankMap = new Map(normalized);
         for (const matchup of context.matchups) {
@@ -1000,10 +1061,10 @@ class ArenaService {
     }
 
     stopRun(runId, reason = USER_STOP_REASON) {
-        if (!this.current || this.current.id !== runId) {
+        const context = [...this.contexts.values()].find((item) => item.id === runId);
+        if (!context) {
             throw requestError('该测试当前不在运行', 409);
         }
-        const context = this.current;
         if (!context.stopReason) {
             context.stopReason = reason;
             context.queryScoresBeforeStop = reason === USER_STOP_REASON;
@@ -1031,11 +1092,6 @@ class ArenaService {
                 this.recordScorePollError(context, error);
             }
         }
-        for (const child of context.children) {
-            if (child.exitCode === null) {
-                child.kill();
-            }
-        }
         this.database.setRunStatus(context.id, status, {
             error,
             finishedAt: new Date().toISOString(),
@@ -1049,8 +1105,11 @@ class ArenaService {
                 reason,
             );
         }
-        if (this.current === context) {
-            this.current = null;
+        if (this.contexts.get(context.srvproId) === context) {
+            this.contexts.delete(context.srvproId);
+        }
+        if (this.contexts.size === 0) {
+            this.stopLocalWindBots();
         }
         this.markChanged(status);
     }
@@ -1073,12 +1132,15 @@ class ArenaService {
     }
 
     async shutdown() {
-        const context = this.current;
-        if (!context) {
+        const contexts = [...this.contexts.values()];
+        if (contexts.length === 0) {
+            this.stopLocalWindBots();
             return;
         }
-        this.stopRun(context.id, 'Arena 服务正在关闭');
-        await context.done;
+        for (const context of contexts) {
+            this.stopRun(context.id, 'Arena 服务正在关闭');
+        }
+        await Promise.all(contexts.map((context) => context.done));
     }
 }
 

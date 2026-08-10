@@ -1189,7 +1189,8 @@ html[data-theme='light'] body .instance-heading h3 {
 }
 
 [data-theme='light'] .deck-list-box,
-html[data-theme='light'] body .windbot-instance {
+html[data-theme='light'] body .windbot-instance,
+html[data-theme='light'] body .srvpro-instance {
     border-color: #c5d8da;
     background: #f7fbfb;
 }

@@ -415,7 +415,8 @@ test('startup events update the active-run revision while WindBot is still start
             },
         },
     };
-    service.current = context;
+    context.srvproId = 'srvpro-1';
+    service.contexts.set(context.srvproId, context);
     service.rebootServer = async () => {};
     service.pollScores = async () => {};
     service.scheduleGames = async () => {};
@@ -467,12 +468,12 @@ test('run creation rejects incomplete settings before persisting a run', () => {
         (error) => error.statusCode === 400 && /SRVPro 地址未配置/.test(error.message),
     );
     assert.equal(createdRunCount, 0);
-    assert.equal(service.current, null);
+    assert.equal(service.contexts.size, 0);
 });
 
 test('challenge run defaults to 100 games per opponent and has a finite total', () => {
     const settings = createDefaultArenaSettings();
-    Object.assign(settings.srvpro, {
+    Object.assign(settings.srvpros[0], {
         host: 'srvpro.lan',
         password: 'secret',
         username: 'arena',
@@ -513,9 +514,9 @@ test('challenge run defaults to 100 games per opponent and has a finite total', 
     service.createRun({ decks: ['Beta', 'Gamma'], kind: 'challenge', targetDeck: 'Alpha' });
 
     assert.equal(persistedRun.gamesPerMatchup, 100);
-    assert.equal(service.current.totalGames, 200);
+    assert.equal(service.contexts.get('srvpro-1').totalGames, 200);
 
-    service.current = null;
+    service.contexts.clear();
     service.createRun({
         decks: ['Beta', 'Gamma'],
         gamesPerMatchup: 25,
@@ -523,9 +524,9 @@ test('challenge run defaults to 100 games per opponent and has a finite total', 
         targetDeck: 'Alpha',
     });
     assert.equal(persistedRun.gamesPerMatchup, 25);
-    assert.equal(service.current.totalGames, 50);
+    assert.equal(service.contexts.get('srvpro-1').totalGames, 50);
 
-    service.current = null;
+    service.contexts.clear();
     service.createRun({
         challengerVersion: 'old',
         decks: ['Beta'],
@@ -537,6 +538,58 @@ test('challenge run defaults to 100 games per opponent and has a finite total', 
     assert.equal(persistedRun.config.targetDeck, 'Alpha');
     assert.equal(persistedRun.matchups[0].competitors[0].endpointHost, 'old.lan');
     assert.equal(persistedRun.matchups[0].competitors[1].endpointHost, 'current.lan');
+});
+
+test('different SRVPro instances can run concurrently while each instance stays exclusive', () => {
+    const settings = createDefaultArenaSettings();
+    Object.assign(settings.srvpros[0], {
+        host: 'srvpro-1.lan',
+        password: 'first-secret',
+        username: 'arena',
+    });
+    settings.srvpros.push({
+        ...settings.srvpros[0],
+        host: 'srvpro-2.lan',
+        id: 'srvpro-2',
+        name: 'SRVPro 2',
+        password: 'second-secret',
+        statusPort: 8922,
+    });
+    Object.assign(settings.windbots.current, {
+        botConfText: [
+            '!Alpha',
+            'Name=Alpha Deck=Alpha Dialog=default',
+            '!Beta',
+            'Name=Beta Deck=Beta Dialog=default',
+        ].join('\n'),
+        host: 'current.lan',
+        mode: 'remote',
+    });
+    const createdRuns = [];
+    const service = new ArenaService({}, {
+        createRun(run) {
+            createdRuns.push(run);
+            return {
+                ...run,
+                matchups: run.matchups.map((matchup, index) => ({ ...matchup, id: index + 1 })),
+            };
+        },
+        getArenaSettings: () => ({ settings }),
+    });
+    service.execute = async () => {};
+
+    service.createRun({ decks: ['Alpha', 'Beta'], kind: 'ranking', srvproId: 'srvpro-1' });
+    service.createRun({ decks: ['Alpha', 'Beta'], kind: 'ranking', srvproId: 'srvpro-2' });
+
+    assert.equal(service.contexts.size, 2);
+    assert.deepEqual(createdRuns.map((run) => run.srvproId), ['srvpro-1', 'srvpro-2']);
+    assert.deepEqual(createdRuns.map((run) => run.config.srvproName), ['SRVPro 1', 'SRVPro 2']);
+    assert.equal(JSON.stringify(createdRuns).includes('first-secret'), false);
+    assert.equal(JSON.stringify(createdRuns).includes('second-secret'), false);
+    assert.throws(
+        () => service.createRun({ decks: ['Alpha', 'Beta'], kind: 'ranking', srvproId: 'srvpro-1' }),
+        (error) => error.statusCode === 409 && /SRVPro 1 已有测试正在运行/.test(error.message),
+    );
 });
 
 test('incomplete settings are persisted and returned for continued editing', async () => {
@@ -552,7 +605,7 @@ test('incomplete settings are persisted and returned for continued editing', asy
     const service = new ArenaService({}, database);
 
     const result = await service.updateSettings(settings);
-    assert.equal(savedSettings.srvpro.roomsPerSecond, 1);
+    assert.equal(savedSettings.srvpros[0].roomsPerSecond, 1);
     assert.equal('scheduler' in savedSettings, false);
     assert.equal(savedSettings.windbots.current.runtimeDir, '');
     assert.equal(result.settings.windbots.current.runtimeDir, '');
@@ -560,7 +613,7 @@ test('incomplete settings are persisted and returned for continued editing', asy
 
 test('saving a remote bot.conf URL fetches and persists its content', async (context) => {
     const settings = createDefaultArenaSettings();
-    Object.assign(settings.srvpro, {
+    Object.assign(settings.srvpros[0], {
         host: 'srvpro.lan',
         password: 'password',
         username: 'admin',
@@ -606,7 +659,7 @@ test('saving a remote bot.conf URL fetches and persists its content', async (con
 
 test('room inspection authenticates server-side and exposes only display fields', async (context) => {
     const settings = createDefaultArenaSettings();
-    Object.assign(settings.srvpro, {
+    Object.assign(settings.srvpros[0], {
         host: 'srvpro.lan',
         password: 'management-secret',
         statusPort: 7922,
@@ -692,7 +745,7 @@ test('local WindBot output is decoded from the Windows Chinese code page', (cont
     const service = new ArenaService({}, {
         getArenaSettings: () => ({ settings }),
     });
-    service.startWindBot({ children: [] }, 'current', '新版', {
+    service.startWindBot('current', '新版', {
         port: 2399,
         runtimeDir: 'F:\\WindBot',
     });
@@ -704,6 +757,36 @@ test('local WindBot output is decoded from the Windows Chinese code page', (cont
     assert.match(service.getWindBotOutput('current').output, /\[错误\] 拒绝访问。/);
     assert.match(loggedOutput, /\[新版:错误\] 拒绝访问。/);
     assert.doesNotMatch(loggedOutput, /�/);
+});
+
+test('shared local WindBot stays alive until the last concurrent run finishes', async () => {
+    const service = new ArenaService({}, {
+        addEvent() {},
+        setRunStatus() {},
+    });
+    let killCount = 0;
+    service.localWindbots.set('current', {
+        exitCode: null,
+        kill() { killCount++; },
+    });
+    const makeContext = (id, srvproId) => ({
+        abortController: new AbortController(),
+        finished: false,
+        id,
+        srvproId,
+    });
+    const first = makeContext('run-1', 'srvpro-1');
+    const second = makeContext('run-2', 'srvpro-2');
+    service.contexts.set(first.srvproId, first);
+    service.contexts.set(second.srvproId, second);
+
+    await service.finish(first, 'completed', 'done');
+    assert.equal(killCount, 0);
+    assert.equal(service.contexts.size, 1);
+
+    await service.finish(second, 'completed', 'done');
+    assert.equal(killCount, 1);
+    assert.equal(service.contexts.size, 0);
 });
 
 test('score polling reads the private SRVPro ranking every 15 seconds', async (context) => {
@@ -724,7 +807,8 @@ test('score polling reads the private SRVPro ranking every 15 seconds', async (c
             },
         },
     };
-    service.current = activeContext;
+    activeContext.srvproId = 'srvpro-1';
+    service.contexts.set(activeContext.srvproId, activeContext);
     const originalFetch = global.fetch;
     context.after(() => { global.fetch = originalFetch; });
     global.fetch = async (url) => {
@@ -740,7 +824,8 @@ test('score polling reads the private SRVPro ranking every 15 seconds', async (c
             type: 'private',
         });
     };
-    service.receiveRank = (rank) => {
+    service.receiveRank = (receivedContext, rank) => {
+        assert.equal(receivedContext, activeContext);
         received.push(rank);
         activeContext.abortController.abort(new DOMException('done', 'AbortError'));
     };
@@ -805,7 +890,8 @@ test('score polling continues after a transient query failure', async (context) 
             },
         },
     };
-    service.current = activeContext;
+    activeContext.srvproId = 'srvpro-1';
+    service.contexts.set(activeContext.srvproId, activeContext);
     const originalFetch = global.fetch;
     context.after(() => { global.fetch = originalFetch; });
     let requestCount = 0;
@@ -820,7 +906,8 @@ test('score polling continues after a transient query failure', async (context) 
             type: 'private',
         });
     };
-    service.receiveRank = (rank) => {
+    service.receiveRank = (receivedContext, rank) => {
+        assert.equal(receivedContext, activeContext);
         received.push(rank);
         activeContext.abortController.abort(new DOMException('done', 'AbortError'));
     };
@@ -860,7 +947,8 @@ test('manual stop queries scores once more after the regular poller exits', asyn
             resolve();
         }, { once: true });
     });
-    service.current = activeContext;
+    activeContext.srvproId = 'srvpro-1';
+    service.contexts.set(activeContext.srvproId, activeContext);
     service.queryScores = async (context) => {
         assert.equal(context, activeContext);
         assert.equal(abortController.signal.aborted, true);
@@ -873,5 +961,5 @@ test('manual stop queries scores once more after the regular poller exits', asyn
     assert.deepEqual(order, ['poller-exited', 'final-query']);
     assert.deepEqual(statuses.map((entry) => entry[1]), ['stopping', 'stopped']);
     assert.deepEqual(events.map((entry) => entry[2]), ['stopping']);
-    assert.equal(service.current, null);
+    assert.equal(service.contexts.size, 0);
 });

@@ -2,15 +2,17 @@
 
 function createDefaultArenaSettings() {
     return {
-        srvpro: {
+        srvpros: [{
             duelPort: 7911,
             host: '',
+            id: 'srvpro-1',
             maxRooms: 100,
+            name: 'SRVPro 1',
             password: '',
             roomsPerSecond: 1,
             statusPort: 7922,
             username: '',
-        },
+        }],
         windbots: {
             current: {
                 botConfPath: '',
@@ -83,21 +85,57 @@ function validateAndMergeArenaSettings(input, existing) {
         throw new Error('配置内容无效');
     }
     const previous = existing || createDefaultArenaSettings();
-    const srvpro = input.srvpro || {};
-    const password = typeof srvpro.password === 'string' && srvpro.password !== ''
-        ? srvpro.password
-        : previous.srvpro.password;
+    if (!Array.isArray(input.srvpros) || input.srvpros.length === 0) {
+        throw new Error('至少需要配置一个 SRVPro 实例');
+    }
+    if (input.srvpros.length > 100) {
+        throw new Error('SRVPro 实例不能超过 100 个');
+    }
+    const previousSrvpros = new Map(previous.srvpros.map((srvpro) => [srvpro.id, srvpro]));
+    const ids = new Set();
+    const managementEndpoints = new Set();
+    const srvpros = input.srvpros.map((source, index) => {
+        const id = String(source?.id || '').trim();
+        const name = String(source?.name || '').trim();
+        if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+            throw new Error(`第 ${index + 1} 个 SRVPro 实例 ID 无效`);
+        }
+        if (ids.has(id)) {
+            throw new Error(`SRVPro 实例 ID 重复: ${id}`);
+        }
+        ids.add(id);
+        if (!name) {
+            throw new Error(`第 ${index + 1} 个 SRVPro 实例名称不能为空`);
+        }
+        if (name.length > 100) {
+            throw new Error(`SRVPro 实例名称不能超过 100 个字符: ${name}`);
+        }
+        const host = String(source.host || '').trim();
+        const statusPort = readInteger(source.statusPort, `${name} 管理端口`, 1, 65535);
+        const managementEndpoint = `${host.toLocaleLowerCase()}:${statusPort}`;
+        if (host && managementEndpoints.has(managementEndpoint)) {
+            throw new Error(`SRVPro 管理地址重复: ${host}:${statusPort}`);
+        }
+        managementEndpoints.add(managementEndpoint);
+        const existingSrvpro = previousSrvpros.get(id);
+        const password = typeof source.password === 'string' && source.password !== ''
+            ? source.password
+            : existingSrvpro?.password || '';
+        return {
+            duelPort: readInteger(source.duelPort, `${name} 对战端口`, 1, 65535),
+            host,
+            id,
+            maxRooms: readInteger(source.maxRooms, `${name} 房间上限`, 1, 100000),
+            name,
+            password,
+            roomsPerSecond: readInteger(source.roomsPerSecond, `${name} 每秒创建房间数`, 1, 100),
+            statusPort,
+            username: String(source.username || '').trim(),
+        };
+    });
 
     const settings = {
-        srvpro: {
-            duelPort: readInteger(srvpro.duelPort, 'SRVPro 对战端口', 1, 65535),
-            host: String(srvpro.host || '').trim(),
-            maxRooms: readInteger(srvpro.maxRooms, '房间上限', 1, 100000),
-            password,
-            roomsPerSecond: readInteger(srvpro.roomsPerSecond, '每秒创建房间数', 1, 100),
-            statusPort: readInteger(srvpro.statusPort, 'SRVPro 管理端口', 1, 65535),
-            username: String(srvpro.username || '').trim(),
-        },
+        srvpros,
         windbots: {
             current: readWindBot(input.windbots?.current, previous.windbots.current, '新版 WindBot '),
             old: readWindBot(input.windbots?.old, previous.windbots.old, '旧版 WindBot '),
@@ -123,20 +161,26 @@ function getWindBotEndpoint(windbot) {
 
 function getPublicArenaSettings(settings, updatedAt) {
     const result = structuredClone(settings);
-    result.srvpro.roomsPerSecond ??= createDefaultArenaSettings().srvpro.roomsPerSecond;
-    result.srvpro.password = '';
+    const defaultRoomsPerSecond = createDefaultArenaSettings().srvpros[0].roomsPerSecond;
+    const secretStatus = { srvpros: {} };
+    for (const srvpro of result.srvpros) {
+        const source = settings.srvpros.find((item) => item.id === srvpro.id);
+        secretStatus.srvpros[srvpro.id] = {
+            passwordConfigured: typeof source?.password === 'string' && source.password !== '',
+        };
+        srvpro.roomsPerSecond ??= defaultRoomsPerSecond;
+        srvpro.password = '';
+        delete srvpro.accessKey;
+        delete srvpro.maxRankNames;
+        delete srvpro.rankPostPath;
+    }
     delete result.scheduler;
-    delete result.srvpro.accessKey;
-    delete result.srvpro.maxRankNames;
-    delete result.srvpro.rankPostPath;
     delete result.development;
     for (const instance of Object.values(result.windbots)) {
         instance.botConfUrl ||= '';
     }
     return {
-        secretStatus: {
-            passwordConfigured: settings.srvpro.password !== '',
-        },
+        secretStatus,
         settings: result,
         updatedAt,
     };

@@ -45,6 +45,42 @@ function close() {
 function save() {
     emit('save', cloneSettings(draft.value));
 }
+
+function addSrvpro() {
+    let id;
+    do {
+        const parts = new Uint32Array(4);
+        if (typeof globalThis.crypto?.getRandomValues === 'function') {
+            globalThis.crypto.getRandomValues(parts);
+        } else {
+            for (let index = 0; index < parts.length; index++) {
+                parts[index] = Math.floor(Math.random() * 0x100000000);
+            }
+        }
+        const token = Array.from(
+            parts,
+            (part) => part.toString(36).padStart(7, '0'),
+        ).join('');
+        id = `srvpro-${token}`;
+    } while (draft.value.srvpros.some((srvpro) => srvpro.id === id));
+    draft.value.srvpros.push({
+        duelPort: 7911,
+        host: '',
+        id,
+        maxRooms: 100,
+        name: `SRVPro ${draft.value.srvpros.length + 1}`,
+        password: '',
+        roomsPerSecond: 1,
+        statusPort: 7922,
+        username: '',
+    });
+}
+
+function removeSrvpro(index) {
+    if (draft.value.srvpros.length > 1) {
+        draft.value.srvpros.splice(index, 1);
+    }
+}
 </script>
 
 <template>
@@ -64,42 +100,69 @@ function save() {
             <n-tabs type="line" animated>
                 <n-tab-pane name="srvpro" tab="SRVPro">
                     <n-alert type="info" :bordered="false">
-                        该 SRVPro 应仅供 Arena 使用。每次测试都会主动重启它并清理现有房间。不应进行测试之外的决斗以免干扰统计结果。
+                        每个实例都应仅供 Arena 使用。任务会独占并重启所选实例；不同实例上的任务可以同时运行。
                     </n-alert>
-                    <n-form label-placement="top" class="settings-form">
-                        <div class="settings-grid">
-                            <n-form-item label="服务地址" class="span-2">
-                                <n-input v-model:value="draft.srvpro.host" placeholder="例如 srvpro.lan 或 192.168.1.20" />
-                            </n-form-item>
-                            <n-form-item label="对战端口">
-                                <n-input-number v-model:value="draft.srvpro.duelPort" :min="1" :max="65535" />
-                            </n-form-item>
-                            <n-form-item label="管理端口">
-                                <n-input-number v-model:value="draft.srvpro.statusPort" :min="1" :max="65535" />
-                            </n-form-item>
-                            <n-form-item label="管理账号">
-                                <n-input v-model:value="draft.srvpro.username" />
-                            </n-form-item>
-                            <n-form-item label="管理密码">
-                                <n-input
-                                    v-model:value="draft.srvpro.password"
-                                    type="password"
-                                    show-password-on="click"
-                                    :placeholder="record.secretStatus.passwordConfigured ? '留空则保留当前密码' : '尚未配置'"
-                                />
-                            </n-form-item>
-                            <n-form-item label="最大房间数">
-                                <n-input-number v-model:value="draft.srvpro.maxRooms" :min="1" />
-                            </n-form-item>
-                            <n-form-item label="每秒创建房间数">
-                                <n-input-number
-                                    v-model:value="draft.srvpro.roomsPerSecond"
-                                    :min="1"
-                                    :max="100"
-                                />
-                            </n-form-item>
-                        </div>
-                    </n-form>
+                    <div class="srvpro-settings">
+                        <section
+                            v-for="(srvpro, index) in draft.srvpros"
+                            :key="srvpro.id"
+                            class="srvpro-instance"
+                        >
+                            <div class="instance-heading">
+                                <div>
+                                    <span>INSTANCE {{ String(index + 1).padStart(2, '0') }}</span>
+                                    <h3>{{ srvpro.name || '未命名 SRVPro' }}</h3>
+                                </div>
+                                <n-button
+                                    size="small"
+                                    tertiary
+                                    type="error"
+                                    :disabled="draft.srvpros.length === 1"
+                                    @click="removeSrvpro(index)"
+                                >
+                                    删除实例
+                                </n-button>
+                            </div>
+                            <n-form label-placement="top">
+                                <div class="settings-grid">
+                                    <n-form-item label="实例名称">
+                                        <n-input v-model:value="srvpro.name" placeholder="例如 本机、NAS-2" />
+                                    </n-form-item>
+                                    <n-form-item label="服务地址">
+                                        <n-input v-model:value="srvpro.host" placeholder="srvpro.lan 或 192.168.1.20" />
+                                    </n-form-item>
+                                    <n-form-item label="对战端口">
+                                        <n-input-number v-model:value="srvpro.duelPort" :min="1" :max="65535" />
+                                    </n-form-item>
+                                    <n-form-item label="管理端口">
+                                        <n-input-number v-model:value="srvpro.statusPort" :min="1" :max="65535" />
+                                    </n-form-item>
+                                    <n-form-item label="管理账号">
+                                        <n-input v-model:value="srvpro.username" />
+                                    </n-form-item>
+                                    <n-form-item label="管理密码">
+                                        <n-input
+                                            v-model:value="srvpro.password"
+                                            type="password"
+                                            show-password-on="click"
+                                            :placeholder="record.secretStatus.srvpros[srvpro.id]?.passwordConfigured ? '留空则保留当前密码' : '尚未配置'"
+                                        />
+                                    </n-form-item>
+                                    <n-form-item label="最大房间数">
+                                        <n-input-number v-model:value="srvpro.maxRooms" :min="1" />
+                                    </n-form-item>
+                                    <n-form-item label="每秒创建房间数">
+                                        <n-input-number
+                                            v-model:value="srvpro.roomsPerSecond"
+                                            :min="1"
+                                            :max="100"
+                                        />
+                                    </n-form-item>
+                                </div>
+                            </n-form>
+                        </section>
+                        <n-button dashed block @click="addSrvpro">添加 SRVPro 实例</n-button>
+                    </div>
                 </n-tab-pane>
 
                 <n-tab-pane name="windbots" tab="WindBot">
@@ -170,7 +233,12 @@ function save() {
 
             </n-tabs>
 
-            <n-alert v-if="disabled" type="warning" :bordered="false">
+            <n-alert
+                v-if="disabled"
+                class="settings-disabled-alert"
+                type="warning"
+                :bordered="false"
+            >
                 当前测试结束后才能保存系统配置。
             </n-alert>
 
@@ -192,7 +260,8 @@ function save() {
 }
 
 .settings-form,
-.windbot-settings {
+.windbot-settings,
+.srvpro-settings {
     margin-top: 22px;
 }
 
@@ -211,11 +280,17 @@ function save() {
     gap: 18px;
 }
 
-.windbot-instance {
+.windbot-instance,
+.srvpro-instance {
     padding: 20px;
     border: 1px solid #1d333c;
     border-radius: 12px;
     background: #0a171d;
+}
+
+.srvpro-settings {
+    display: grid;
+    gap: 18px;
 }
 
 .instance-heading {
@@ -243,6 +318,10 @@ function save() {
     display: flex;
     gap: 10px;
     justify-content: flex-end;
+}
+
+.settings-disabled-alert {
+    margin-top: 18px;
 }
 
 @media (max-width: 640px) {

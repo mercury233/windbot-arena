@@ -8,6 +8,40 @@ const test = require('node:test');
 const { ArenaDatabase } = require('../server/database');
 const { normalizeRank } = require('../server/stats');
 
+test('ArenaDatabase migrates the single SRVPro setting without losing its secret', (context) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'windbot-arena-settings-migration-'));
+    const databasePath = path.join(tempDir, 'arena.sqlite');
+    let database = new ArenaDatabase(databasePath);
+    context.after(() => {
+        if (database.db.open) {
+            database.close();
+        }
+        fs.rmSync(tempDir, { force: true, recursive: true });
+    });
+    const current = database.getArenaSettings().settings;
+    const legacy = {
+        srvpro: {
+            ...current.srvpros[0],
+            host: 'legacy-srvpro.lan',
+            password: 'legacy-secret',
+        },
+        windbots: current.windbots,
+    };
+    database.db.prepare('UPDATE arena_settings SET settings_json = ? WHERE singleton = 1')
+        .run(JSON.stringify(legacy));
+    database.db.prepare('DELETE FROM schema_migrations WHERE version = ?')
+        .run('002_multiple_srvpro_settings.sql');
+    database.close();
+
+    database = new ArenaDatabase(databasePath);
+    const migrated = database.getArenaSettings().settings;
+    assert.equal('srvpro' in migrated, false);
+    assert.equal(migrated.srvpros[0].id, 'srvpro-1');
+    assert.equal(migrated.srvpros[0].name, 'SRVPro 1');
+    assert.equal(migrated.srvpros[0].host, 'legacy-srvpro.lan');
+    assert.equal(migrated.srvpros[0].password, 'legacy-secret');
+});
+
 test('ArenaDatabase persists a run and applies rank statistics', (context) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'windbot-arena-db-'));
     const database = new ArenaDatabase(path.join(tempDir, 'arena.sqlite'));
@@ -17,11 +51,11 @@ test('ArenaDatabase persists a run and applies rank statistics', (context) => {
     });
 
     const settingsRecord = database.getArenaSettings();
-    settingsRecord.settings.srvpro.host = 'srvpro.lan';
-    settingsRecord.settings.srvpro.roomsPerSecond = 4;
+    settingsRecord.settings.srvpros[0].host = 'srvpro.lan';
+    settingsRecord.settings.srvpros[0].roomsPerSecond = 4;
     database.saveArenaSettings(settingsRecord.settings);
-    assert.equal(database.getArenaSettings().settings.srvpro.host, 'srvpro.lan');
-    assert.equal(database.getArenaSettings().settings.srvpro.roomsPerSecond, 4);
+    assert.equal(database.getArenaSettings().settings.srvpros[0].host, 'srvpro.lan');
+    assert.equal(database.getArenaSettings().settings.srvpros[0].roomsPerSecond, 4);
 
     database.createRun({
         config: { duelServer: '127.0.0.1:7911' },
@@ -29,6 +63,7 @@ test('ArenaDatabase persists a run and applies rank statistics', (context) => {
         gamesPerMatchup: 10,
         id: 'run-1',
         kind: 'regression',
+        srvproId: 'srvpro-1',
         matchups: [{
             aiLevel: 4,
             competitors: [
@@ -81,9 +116,14 @@ test('ArenaDatabase persists a run and applies rank statistics', (context) => {
         gamesPerMatchup: 0,
         id: 'run-2',
         kind: 'ranking',
+        srvproId: 'srvpro-2',
         matchups: [],
     });
     assert.equal(database.getRunCount(), 2);
+    assert.deepEqual(
+        database.findActiveRuns().map((run) => run.srvproId).sort(),
+        ['srvpro-1', 'srvpro-2'],
+    );
     assert.equal(database.listRuns(1, 0)[0].id, 'run-2');
     assert.equal(database.listRuns(1, 1)[0].id, 'run-1');
     const unmatchedRankAt = database.recordRank(null, normalizeRank(rawRank), rawRank);
@@ -125,6 +165,7 @@ test('ArenaDatabase derives challenge results from each opponent ranking', (cont
         gamesPerMatchup: 100,
         id: 'challenge-1',
         kind: 'challenge',
+        srvproId: 'srvpro-1',
         matchups: [
             {
                 aiLevel: 2,
@@ -184,6 +225,7 @@ test('ArenaDatabase records an event when an active run is marked interrupted', 
         gamesPerMatchup: 0,
         id: 'interrupted-1',
         kind: 'ranking',
+        srvproId: 'srvpro-1',
         matchups: [],
     });
 
@@ -222,6 +264,7 @@ test('ArenaDatabase represents unlimited ranking entries and counts launched pai
         gamesPerMatchup: 0,
         id: 'ranking-1',
         kind: 'ranking',
+        srvproId: 'srvpro-1',
         matchups: [
             { aiLevel: 4, competitors: [competitor('Dragon', '排001')], label: 'Dragon' },
             { aiLevel: 2, competitors: [competitor('Spellbook', '排002')], label: 'Spellbook' },

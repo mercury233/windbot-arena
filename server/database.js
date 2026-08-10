@@ -32,8 +32,9 @@ function mapCompetitor(row) {
 }
 
 function mapRunRow(row) {
+    const config = JSON.parse(row.config_json);
     return {
-        config: JSON.parse(row.config_json),
+        config,
         createdAt: row.created_at,
         error: row.error,
         finishedAt: row.finished_at,
@@ -43,6 +44,7 @@ function mapRunRow(row) {
         latestRankAt: row.latest_rank_at,
         launchedGames: row.launched_games,
         roomCount: row.room_count,
+        srvproId: config.srvproId || 'srvpro-1',
         startedAt: row.started_at,
         status: row.status,
         stopReason: row.stop_reason,
@@ -146,7 +148,7 @@ class ArenaDatabase {
                 run.gamesPerMatchup,
                 run.matchups.length * run.gamesPerMatchup,
                 run.createdAt,
-                JSON.stringify(run.config),
+                JSON.stringify({ ...run.config, srvproId: run.srvproId }),
             );
             const insertMatchup = this.db.prepare(`
                 INSERT INTO matchups (run_id, ordinal, label, ai_level, target_games)
@@ -383,15 +385,14 @@ class ArenaDatabase {
         return Number(this.db.prepare('SELECT COUNT(*) AS count FROM runs').get().count);
     }
 
-    findActiveRun() {
+    findActiveRuns() {
         const placeholders = activeStatuses.map(() => '?').join(', ');
-        const row = this.db.prepare(`
+        const rows = this.db.prepare(`
             SELECT * FROM runs
             WHERE status IN (${placeholders})
             ORDER BY created_at DESC
-            LIMIT 1
-        `).get(...activeStatuses);
-        return row ? mapRunRow(row) : null;
+        `).all(...activeStatuses);
+        return rows.map(mapRunRow);
     }
 
     markActiveRunsInterrupted() {

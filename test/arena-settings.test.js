@@ -10,7 +10,7 @@ const {
 
 function makeValidSettings() {
     const settings = createDefaultArenaSettings();
-    Object.assign(settings.srvpro, {
+    Object.assign(settings.srvpros[0], {
         host: 'srvpro.lan',
         password: 'admin-secret',
         username: 'arena',
@@ -31,9 +31,9 @@ function makeValidSettings() {
 test('settings validation preserves configured secrets when fields are blank', () => {
     const existing = makeValidSettings();
     const input = structuredClone(existing);
-    input.srvpro.password = '';
+    input.srvpros[0].password = '';
     const result = validateAndMergeArenaSettings(input, existing);
-    assert.equal(result.srvpro.password, 'admin-secret');
+    assert.equal(result.srvpros[0].password, 'admin-secret');
 });
 
 test('incomplete runtime settings can still be saved', () => {
@@ -41,42 +41,69 @@ test('incomplete runtime settings can still be saved', () => {
     const result = validateAndMergeArenaSettings(settings, settings);
 
     assert.equal('scheduler' in result, false);
-    assert.equal(result.srvpro.roomsPerSecond, 1);
-    assert.equal(result.srvpro.host, '');
-    assert.equal(result.srvpro.username, '');
-    assert.equal(result.srvpro.password, '');
+    assert.equal(result.srvpros[0].roomsPerSecond, 1);
+    assert.equal(result.srvpros[0].host, '');
+    assert.equal(result.srvpros[0].username, '');
+    assert.equal(result.srvpros[0].password, '');
     assert.equal(result.windbots.current.runtimeDir, '');
     assert.equal(result.windbots.current.botConfPath, '');
 });
 
 test('public settings never expose SRVPro secrets', () => {
     const settings = makeValidSettings();
-    settings.srvpro.accessKey = 'obsolete-rank-secret';
-    delete settings.srvpro.roomsPerSecond;
+    settings.srvpros[0].accessKey = 'obsolete-rank-secret';
+    delete settings.srvpros[0].roomsPerSecond;
     settings.scheduler = { pairDelayMs: 250, pairsPerTick: 2 };
     settings.development = { rankForwardEnabled: true };
     const result = getPublicArenaSettings(settings, '2026-08-08T00:00:00.000Z');
-    assert.equal(result.settings.srvpro.password, '');
-    assert.equal(result.settings.srvpro.roomsPerSecond, 1);
+    assert.equal(result.settings.srvpros[0].password, '');
+    assert.equal(result.settings.srvpros[0].roomsPerSecond, 1);
     assert.equal('scheduler' in result.settings, false);
-    assert.equal('accessKey' in result.settings.srvpro, false);
+    assert.equal('accessKey' in result.settings.srvpros[0], false);
     assert.equal('development' in result.settings, false);
-    assert.equal(result.secretStatus.passwordConfigured, true);
+    assert.equal(result.secretStatus.srvpros['srvpro-1'].passwordConfigured, true);
     assert.equal(result.settings.windbots.current.botConfUrl, '');
 });
 
 test('rooms created per second must be an integer in the supported range', () => {
     const settings = makeValidSettings();
-    settings.srvpro.roomsPerSecond = 0;
+    settings.srvpros[0].roomsPerSecond = 0;
     assert.throws(
         () => validateAndMergeArenaSettings(settings, settings),
         /每秒创建房间数 必须是 1 到 100 之间的整数/,
     );
 
-    settings.srvpro.roomsPerSecond = 2.5;
+    settings.srvpros[0].roomsPerSecond = 2.5;
     assert.throws(
         () => validateAndMergeArenaSettings(settings, settings),
         /每秒创建房间数 必须是 1 到 100 之间的整数/,
+    );
+});
+
+test('multiple SRVPro instances keep secrets by stable ID and require unique endpoints', () => {
+    const existing = makeValidSettings();
+    existing.srvpros.push({
+        ...existing.srvpros[0],
+        host: 'srvpro-2.lan',
+        id: 'srvpro-2',
+        name: 'SRVPro 2',
+        password: 'second-secret',
+        statusPort: 8922,
+    });
+    const input = structuredClone(existing);
+    input.srvpros.reverse();
+    input.srvpros.forEach((srvpro) => { srvpro.password = ''; });
+
+    const result = validateAndMergeArenaSettings(input, existing);
+    assert.equal(result.srvpros[0].id, 'srvpro-2');
+    assert.equal(result.srvpros[0].password, 'second-secret');
+    assert.equal(result.srvpros[1].password, 'admin-secret');
+
+    input.srvpros[1].host = input.srvpros[0].host;
+    input.srvpros[1].statusPort = input.srvpros[0].statusPort;
+    assert.throws(
+        () => validateAndMergeArenaSettings(input, existing),
+        /SRVPro 管理地址重复/,
     );
 });
 

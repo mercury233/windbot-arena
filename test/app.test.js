@@ -29,14 +29,14 @@ test('settings, room, WindBot and run APIs return service data', async (context)
     let refreshedDecks = false;
     let requestedRunPage;
     const publicRecord = {
-        secretStatus: { passwordConfigured: true },
-        settings: { srvpro: { password: '' } },
+        secretStatus: { srvpros: { 'srvpro-1': { passwordConfigured: true } } },
+        settings: { srvpros: [{ id: 'srvpro-1', password: '' }] },
         updatedAt: '2026-08-08T00:00:00.000Z',
     };
     const service = {
         getSettings: () => publicRecord,
         getWindBotOutput: (name) => ({ available: true, name, output: 'ready' }),
-        listRooms: () => ({ rooms: [{ id: '123', name: 'M,RANDOM#123' }] }),
+        listRooms: (srvproId) => ({ rooms: [{ id: '123', name: srvproId }] }),
         refreshBotConfigs: () => {
             refreshedDecks = true;
             return { configuration: {}, fetchedRemoteCount: 1 };
@@ -52,6 +52,8 @@ test('settings, room, WindBot and run APIs return service data', async (context)
             requestedRunPage = { limit, offset };
             return [{ id: 'run-21' }];
         },
+        findActiveRuns: () => [{ id: 'run-active' }],
+        getRun: (id) => ({ id, srvproId: 'srvpro-1' }),
     };
     const app = createApp({ rootDir: path.resolve(__dirname, '..') }, database, service);
     const server = createServer(app);
@@ -63,8 +65,8 @@ test('settings, room, WindBot and run APIs return service data', async (context)
     const settingsResponse = await fetch(`${baseUrl}/api/settings`);
     assert.equal(settingsResponse.headers.get('cache-control'), 'no-store');
     assert.deepEqual(await settingsResponse.json(), publicRecord);
-    assert.deepEqual(await (await fetch(`${baseUrl}/api/srvpro/rooms`)).json(), {
-        rooms: [{ id: '123', name: 'M,RANDOM#123' }],
+    assert.deepEqual(await (await fetch(`${baseUrl}/api/srvpro/rooms?srvproId=srvpro-2`)).json(), {
+        rooms: [{ id: '123', name: 'srvpro-2' }],
     });
     assert.deepEqual(await (await fetch(`${baseUrl}/api/windbots/current/output`)).json(), {
         available: true,
@@ -74,11 +76,11 @@ test('settings, room, WindBot and run APIs return service data', async (context)
     const siteResponse = await fetch(`${baseUrl}/`);
     assert.equal(siteResponse.headers.get('cache-control'), 'no-cache');
     await fetch(`${baseUrl}/api/settings`, {
-        body: JSON.stringify({ srvpro: { host: 'srvpro.lan' } }),
+        body: JSON.stringify({ srvpros: [{ host: 'srvpro.lan' }] }),
         headers: { 'Content-Type': 'application/json' },
         method: 'PUT',
     });
-    assert.equal(savedSettings.srvpro.host, 'srvpro.lan');
+    assert.equal(savedSettings.srvpros[0].host, 'srvpro.lan');
     const refreshResponse = await fetch(`${baseUrl}/api/decks/refresh`, { method: 'POST' });
     assert.equal(refreshResponse.status, 200);
     assert.equal(refreshedDecks, true);
@@ -88,6 +90,9 @@ test('settings, room, WindBot and run APIs return service data', async (context)
         total: 23,
     });
     assert.deepEqual(requestedRunPage, { limit: 10, offset: 20 });
+    assert.deepEqual(await (await fetch(`${baseUrl}/api/runs/active`)).json(), {
+        runs: [{ id: 'run-active', srvproId: 'srvpro-1' }],
+    });
 
 });
 
