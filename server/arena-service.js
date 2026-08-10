@@ -74,6 +74,49 @@ async function fetchWithTimeout(url, timeoutMs, signal, options) {
     return fetch(url, { ...options, signal: combinedSignal });
 }
 
+function findNetworkErrorCode(error) {
+    let current = error;
+    while (current) {
+        if (typeof current.code === 'string') {
+            return current.code;
+        }
+        current = current.cause;
+    }
+    return null;
+}
+
+async function fetchSrvproApi(url, label, timeoutMs, signal) {
+    try {
+        return await fetchWithTimeout(url, timeoutMs, signal);
+    } catch (error) {
+        if (signal?.aborted) {
+            throw signal.reason || error;
+        }
+
+        const endpoint = `${url.origin}${url.pathname}`;
+        if (error?.name === 'TimeoutError') {
+            throw new Error(
+                `${label}请求超时（${timeoutMs / 1000} 秒）：${endpoint}；请确认 SRVPro 已启动且管理端口可访问`,
+                { cause: error },
+            );
+        }
+
+        const code = findNetworkErrorCode(error);
+        const reason = {
+            ECONNREFUSED: '目标拒绝连接（ECONNREFUSED），请确认 SRVPro 已启动且管理端口配置正确',
+            ECONNRESET: '连接被目标重置（ECONNRESET）',
+            ENETUNREACH: '目标网络不可达（ENETUNREACH）',
+            EHOSTUNREACH: '目标主机不可达（EHOSTUNREACH）',
+            ENOTFOUND: '无法解析目标主机名（ENOTFOUND）',
+            EAI_AGAIN: '目标主机名解析暂时失败（EAI_AGAIN）',
+        }[code] || (code ? `${error.message}（${code}）` : error.message);
+        throw new Error(
+            `${label}请求失败：${endpoint}；${reason || String(error)}`,
+            { cause: error },
+        );
+    }
+}
+
 function makeHttpUrl(host, port, pathname = '/') {
     const url = new URL('http://localhost');
     url.hostname = host;
@@ -632,7 +675,7 @@ class ArenaService {
         const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/getrooms');
         url.searchParams.set('username', srvpro.username);
         url.searchParams.set('pass', srvpro.password);
-        const response = await fetchWithTimeout(url, 5000, signal);
+        const response = await fetchSrvproApi(url, 'SRVPro 房间 API ', 5000, signal);
         if (!response.ok) {
             throw new Error(`房间 API 返回 HTTP ${response.status}`);
         }
@@ -653,7 +696,7 @@ class ArenaService {
         const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/getroomscount');
         url.searchParams.set('username', srvpro.username);
         url.searchParams.set('pass', srvpro.password);
-        const response = await fetchWithTimeout(url, 5000, signal);
+        const response = await fetchSrvproApi(url, 'SRVPro 房间计数 API ', 5000, signal);
         if (!response.ok) {
             throw new Error(`房间计数 API 返回 HTTP ${response.status}`);
         }
@@ -672,7 +715,7 @@ class ArenaService {
         const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/getscores');
         url.searchParams.set('username', srvpro.username);
         url.searchParams.set('pass', srvpro.password);
-        const response = await fetchWithTimeout(url, 5000, signal);
+        const response = await fetchSrvproApi(url, 'SRVPro 排行 API ', 5000, signal);
         if (!response.ok) {
             throw new Error(`排行 API 返回 HTTP ${response.status}`);
         }
@@ -890,7 +933,7 @@ class ArenaService {
         url.searchParams.set('username', srvpro.username);
         url.searchParams.set('pass', srvpro.password);
         url.searchParams.set('kick', password);
-        const response = await fetchWithTimeout(url, 5000);
+        const response = await fetchSrvproApi(url, 'SRVPro 关房 API ', 5000);
         const body = await response.text();
         this.assertServerInstance(context, getServerInstanceId(response));
         if (!response.ok || body.includes('密码错误')) {

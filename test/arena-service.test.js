@@ -433,6 +433,51 @@ test('room counts use the lightweight SRVPro endpoint', async (context) => {
     assert.equal(await service.getRoomCount(activeContext), 3);
 });
 
+test('SRVPro room count timeout reports the endpoint and startup guidance', async (context) => {
+    const service = new ArenaService({}, {});
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    };
+
+    await assert.rejects(
+        service.fetchRoomCount({
+            host: '127.0.0.1',
+            password: 'management-secret',
+            statusPort: 7922,
+            username: 'arena',
+        }),
+        (error) => error.message === 'SRVPro 房间计数 API 请求超时（5 秒）：http://127.0.0.1:7922/api/getroomscount；请确认 SRVPro 已启动且管理端口可访问'
+            && error.cause?.name === 'TimeoutError'
+            && !error.message.includes('management-secret'),
+    );
+});
+
+test('SRVPro connection refusal exposes the network error code without credentials', async (context) => {
+    const service = new ArenaService({}, {});
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async () => {
+        const cause = new Error('connect ECONNREFUSED 127.0.0.1:7922');
+        cause.code = 'ECONNREFUSED';
+        throw new TypeError('fetch failed', { cause });
+    };
+
+    await assert.rejects(
+        service.fetchRoomCount({
+            host: '127.0.0.1',
+            password: 'management-secret',
+            statusPort: 7922,
+            username: 'arena',
+        }),
+        (error) => /SRVPro 房间计数 API 请求失败：http:\/\/127\.0\.0\.1:7922\/api\/getroomscount/.test(error.message)
+            && /目标拒绝连接（ECONNREFUSED）/.test(error.message)
+            && /请确认 SRVPro 已启动且管理端口配置正确/.test(error.message)
+            && !error.message.includes('management-secret'),
+    );
+});
+
 test('deck listing keeps current decks available without an old WindBot', () => {
     const settings = createDefaultArenaSettings();
     Object.assign(settings.windbots.current, {
