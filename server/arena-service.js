@@ -21,6 +21,8 @@ const PRIVATE_DUEL_ROOM_MIN = 100000000;
 const PRIVATE_DUEL_ROOM_MAX = 999999999;
 const MAX_WINDBOT_OUTPUT_LENGTH = 2000000;
 const SCORE_POLL_MS = 15000;
+const SCHEDULE_POLL_MS = 1000;
+const SETTLE_TIMEOUT_MS = 10 * 60 * 1000;
 const USER_STOP_REASON = '用户从 Web 界面停止了测试';
 
 function requestError(message, statusCode = 400) {
@@ -759,17 +761,14 @@ class ArenaService {
     }
 
     async launchPair(context, players) {
-        const scheduler = context.settings.scheduler;
+        const roomsPerSecond = context.settings.srvpro.roomsPerSecond ?? 1;
+        const joinDelayMs = SCHEDULE_POLL_MS / (roomsPerSecond * 2);
         const password = this.nextPrivateDuelPassword(context);
         try {
             await this.addBot(context, players[0], password);
-            if (scheduler.pairDelayMs > 0) {
-                await sleep(scheduler.pairDelayMs, context.abortController.signal);
-            }
+            await sleep(joinDelayMs, context.abortController.signal);
             await this.addBot(context, players[1], password);
-            if (scheduler.pairDelayMs > 0) {
-                await sleep(scheduler.pairDelayMs, context.abortController.signal);
-            }
+            await sleep(joinDelayMs, context.abortController.signal);
         } catch (error) {
             try {
                 await this.closePrivateDuelRoom(context, password);
@@ -801,19 +800,21 @@ class ArenaService {
     }
 
     async scheduleGames(context) {
-        const { scheduler, srvpro } = context.settings;
+        const { srvpro } = context.settings;
+        const roomsPerSecond = srvpro.roomsPerSecond ?? 1;
         let consecutiveErrors = 0;
         let launchedGames = 0;
         while (context.kind === 'ranking' || launchedGames < context.totalGames) {
+            const pollStartedAt = Date.now();
             try {
                 const roomCount = await this.getRoomCount(context);
                 this.database.setRoomCount(context.id, roomCount);
                 const availableRooms = Math.max(0, srvpro.maxRooms - roomCount);
                 const toLaunch = Math.min(
                     availableRooms,
-                    scheduler.pairsPerTick,
+                    roomsPerSecond,
                     context.kind === 'ranking'
-                        ? scheduler.pairsPerTick
+                        ? roomsPerSecond
                         : context.totalGames - launchedGames,
                 );
 
@@ -867,13 +868,17 @@ class ArenaService {
                     throw new Error('连续 10 次无法查询房间或创建 bot，已停止调度');
                 }
             }
-            await sleep(scheduler.pollMs, context.abortController.signal);
+            if (context.kind !== 'ranking' && launchedGames >= context.totalGames) {
+                return;
+            }
+            const remainingPollMs = Math.max(0, SCHEDULE_POLL_MS - (Date.now() - pollStartedAt));
+            await sleep(remainingPollMs, context.abortController.signal);
         }
     }
 
     async waitForResults(context) {
-        const { scheduler } = context.settings;
-        const deadline = Date.now() + scheduler.settleMinutes * 60 * 1000;
+        const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+        let finalScoreErrorRecorded = false;
         while (Date.now() < deadline) {
             const complete = context.matchups.every(
                 (matchup) => (context.latestObserved.get(matchup.id) || 0) >= context.gamesPerMatchup,
@@ -881,7 +886,39 @@ class ArenaService {
             if (complete) {
                 return true;
             }
-            await sleep(Math.min(scheduler.pollMs, 5000), context.abortController.signal);
+            let roomCount;
+            try {
+                roomCount = await this.getRoomCount(context);
+                this.database.setRoomCount(context.id, roomCount);
+            } catch (error) {
+                if (context.abortController.signal.aborted) {
+                    throw context.abortController.signal.reason;
+                }
+            }
+            if (roomCount === 0) {
+                try {
+                    await this.queryScores(context, context.abortController.signal);
+                } catch (error) {
+                    if (context.abortController.signal.aborted) {
+                        throw context.abortController.signal.reason;
+                    }
+                    if (!finalScoreErrorRecorded) {
+                        this.recordScorePollError(context, error);
+                        finalScoreErrorRecorded = true;
+                    }
+                    await sleep(SCHEDULE_POLL_MS, context.abortController.signal);
+                    continue;
+                }
+                this.database.addEvent(
+                    context.id,
+                    'warning',
+                    'settle-empty-rooms',
+                    'SRVPro 房间数已为 0，任务提前完成；可能有对局未被排行统计记录',
+                );
+                this.markChanged('run-event');
+                return true;
+            }
+            await sleep(SCHEDULE_POLL_MS, context.abortController.signal);
         }
         return false;
     }
@@ -989,4 +1026,10 @@ class ArenaService {
     }
 }
 
-module.exports = { ArenaService, SCORE_POLL_MS, requestError };
+module.exports = {
+    ArenaService,
+    SCHEDULE_POLL_MS,
+    SCORE_POLL_MS,
+    SETTLE_TIMEOUT_MS,
+    requestError,
+};

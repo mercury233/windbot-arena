@@ -18,8 +18,10 @@ test('ArenaDatabase persists a run and applies rank statistics', (context) => {
 
     const settingsRecord = database.getArenaSettings();
     settingsRecord.settings.srvpro.host = 'srvpro.lan';
+    settingsRecord.settings.srvpro.roomsPerSecond = 4;
     database.saveArenaSettings(settingsRecord.settings);
     assert.equal(database.getArenaSettings().settings.srvpro.host, 'srvpro.lan');
+    assert.equal(database.getArenaSettings().settings.srvpro.roomsPerSecond, 4);
 
     database.createRun({
         config: { duelServer: '127.0.0.1:7911' },

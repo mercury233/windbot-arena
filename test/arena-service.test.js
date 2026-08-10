@@ -5,7 +5,12 @@ const childProcess = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const test = require('node:test');
-const { ArenaService, SCORE_POLL_MS } = require('../server/arena-service');
+const {
+    ArenaService,
+    SCHEDULE_POLL_MS,
+    SCORE_POLL_MS,
+    SETTLE_TIMEOUT_MS,
+} = require('../server/arena-service');
 const { createDefaultArenaSettings } = require('../server/arena-settings');
 
 function makeSchedulingContext(kind, labels) {
@@ -22,8 +27,7 @@ function makeSchedulingContext(kind, labels) {
         })),
         nextMatchupIndex: 0,
         settings: {
-            scheduler: { pairDelayMs: 0, pairsPerTick: 1, pollMs: 1 },
-            srvpro: { maxRooms: 1 },
+            srvpro: { maxRooms: 100, roomsPerSecond: 100 },
         },
         totalGames: 0,
     };
@@ -44,8 +48,9 @@ test('ranking scheduler draws two distinct random entries and records one pair l
     service.launchRankingPair = async (activeContext, entries) => {
         assert.equal(activeContext, context);
         assert.notEqual(entries[0].id, entries[1].id);
-        if (launches.length === 19) {
+        if (launches.length === 20) {
             context.abortController.abort(new DOMException('测试结束', 'AbortError'));
+            throw context.abortController.signal.reason;
         }
     };
 
@@ -81,14 +86,58 @@ test('challenge scheduler rotates through opponents in list order and stops at t
     assert.deepEqual(context.matchups.map((entry) => entry.launchedGames), [2, 2, 2]);
 });
 
+test('scheduling and final result wait use fixed timing', () => {
+    assert.equal(SCHEDULE_POLL_MS, 1000);
+    assert.equal(SETTLE_TIMEOUT_MS, 10 * 60 * 1000);
+});
+
+test('final result wait queries scores before completing when SRVPro has no rooms', async () => {
+    const events = [];
+    const roomCounts = [];
+    let scoreQueryCount = 0;
+    const database = {
+        addEvent(...args) { events.push(args); },
+        setRoomCount(runId, roomCount) { roomCounts.push([runId, roomCount]); },
+    };
+    const service = new ArenaService({}, database);
+    const context = {
+        abortController: new AbortController(),
+        gamesPerMatchup: 1,
+        id: 'settling-run',
+        latestObserved: new Map([[1, 0]]),
+        matchups: [{ id: 1 }],
+        settings: { srvpro: {} },
+    };
+    service.getRoomCount = async (activeContext) => {
+        assert.equal(activeContext, context);
+        return 0;
+    };
+    service.queryScores = async (activeContext, signal) => {
+        assert.equal(activeContext, context);
+        assert.equal(signal, context.abortController.signal);
+        scoreQueryCount++;
+    };
+
+    assert.equal(await service.waitForResults(context), true);
+    assert.equal(scoreQueryCount, 1);
+    assert.deepEqual(roomCounts, [['settling-run', 0]]);
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0].slice(0, 3), [
+        'settling-run',
+        'warning',
+        'settle-empty-rooms',
+    ]);
+    assert.match(events[0][3], /可能有对局未被排行统计记录/);
+    assert.deepEqual(service.getRevisions(), { active: 1, runs: 0, system: 0 });
+});
+
 test('pair launches use one private duel password per pair and never reuse it', async (context) => {
     const service = new ArenaService({}, {});
     const activeContext = {
         abortController: new AbortController(),
         nextPrivateRoomNumber: 123456789,
         settings: {
-            scheduler: { pairDelayMs: 0 },
-            srvpro: { duelPort: 7911, host: 'srvpro.lan' },
+            srvpro: { duelPort: 7911, host: 'srvpro.lan', roomsPerSecond: 100 },
         },
     };
     const competitor = (name, port) => ({
@@ -137,11 +186,11 @@ test('pair launch closes its private room when a WindBot request fails', async (
         abortController: new AbortController(),
         nextPrivateRoomNumber: 123456789,
         settings: {
-            scheduler: { pairDelayMs: 0 },
             srvpro: {
                 duelPort: 7911,
                 host: 'srvpro.lan',
                 password: 'management-secret',
+                roomsPerSecond: 100,
                 statusPort: 7922,
                 username: 'arena',
             },
@@ -439,6 +488,8 @@ test('incomplete settings are persisted and returned for continued editing', asy
     const service = new ArenaService({}, database);
 
     const result = await service.updateSettings(settings);
+    assert.equal(savedSettings.srvpro.roomsPerSecond, 1);
+    assert.equal('scheduler' in savedSettings, false);
     assert.equal(savedSettings.windbots.current.runtimeDir, '');
     assert.equal(result.settings.windbots.current.runtimeDir, '');
 });

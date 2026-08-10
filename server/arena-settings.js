@@ -2,17 +2,12 @@
 
 function createDefaultArenaSettings() {
     return {
-        scheduler: {
-            pairDelayMs: 250,
-            pairsPerTick: 2,
-            pollMs: 1000,
-            settleMinutes: 30,
-        },
         srvpro: {
             duelPort: 7911,
             host: '',
             maxRooms: 100,
             password: '',
+            roomsPerSecond: 1,
             statusPort: 7922,
             username: '',
         },
@@ -94,17 +89,12 @@ function validateAndMergeArenaSettings(input, existing) {
         : previous.srvpro.password;
 
     const settings = {
-        scheduler: {
-            pairDelayMs: readInteger(input.scheduler?.pairDelayMs, '双方加入间隔', 0, 60000),
-            pairsPerTick: readInteger(input.scheduler?.pairsPerTick, '每轮创建对局数', 1, 100),
-            pollMs: readInteger(input.scheduler?.pollMs, '调度轮询间隔', 100, 60000),
-            settleMinutes: readInteger(input.scheduler?.settleMinutes, '等待最后一批对局完成时间', 1, 1440),
-        },
         srvpro: {
             duelPort: readInteger(srvpro.duelPort, 'SRVPro 对战端口', 1, 65535),
             host: String(srvpro.host || '').trim(),
             maxRooms: readInteger(srvpro.maxRooms, '房间上限', 1, 100000),
             password,
+            roomsPerSecond: readInteger(srvpro.roomsPerSecond, '每秒创建房间数', 1, 100),
             statusPort: readInteger(srvpro.statusPort, 'SRVPro 管理端口', 1, 65535),
             username: String(srvpro.username || '').trim(),
         },
@@ -133,7 +123,9 @@ function getWindBotEndpoint(windbot) {
 
 function getPublicArenaSettings(settings, updatedAt) {
     const result = structuredClone(settings);
+    result.srvpro.roomsPerSecond ??= createDefaultArenaSettings().srvpro.roomsPerSecond;
     result.srvpro.password = '';
+    delete result.scheduler;
     delete result.srvpro.accessKey;
     delete result.srvpro.maxRankNames;
     delete result.srvpro.rankPostPath;

@@ -40,6 +40,8 @@ test('incomplete runtime settings can still be saved', () => {
     const settings = createDefaultArenaSettings();
     const result = validateAndMergeArenaSettings(settings, settings);
 
+    assert.equal('scheduler' in result, false);
+    assert.equal(result.srvpro.roomsPerSecond, 1);
     assert.equal(result.srvpro.host, '');
     assert.equal(result.srvpro.username, '');
     assert.equal(result.srvpro.password, '');
@@ -50,13 +52,32 @@ test('incomplete runtime settings can still be saved', () => {
 test('public settings never expose SRVPro secrets', () => {
     const settings = makeValidSettings();
     settings.srvpro.accessKey = 'obsolete-rank-secret';
+    delete settings.srvpro.roomsPerSecond;
+    settings.scheduler = { pairDelayMs: 250, pairsPerTick: 2 };
     settings.development = { rankForwardEnabled: true };
     const result = getPublicArenaSettings(settings, '2026-08-08T00:00:00.000Z');
     assert.equal(result.settings.srvpro.password, '');
+    assert.equal(result.settings.srvpro.roomsPerSecond, 1);
+    assert.equal('scheduler' in result.settings, false);
     assert.equal('accessKey' in result.settings.srvpro, false);
     assert.equal('development' in result.settings, false);
     assert.equal(result.secretStatus.passwordConfigured, true);
     assert.equal(result.settings.windbots.current.botConfUrl, '');
+});
+
+test('rooms created per second must be an integer in the supported range', () => {
+    const settings = makeValidSettings();
+    settings.srvpro.roomsPerSecond = 0;
+    assert.throws(
+        () => validateAndMergeArenaSettings(settings, settings),
+        /每秒创建房间数 必须是 1 到 100 之间的整数/,
+    );
+
+    settings.srvpro.roomsPerSecond = 2.5;
+    assert.throws(
+        () => validateAndMergeArenaSettings(settings, settings),
+        /每秒创建房间数 必须是 1 到 100 之间的整数/,
+    );
 });
 
 test('remote WindBot accepts an HTTP bot.conf URL instead of pasted content', () => {

@@ -91,6 +91,13 @@ function save() {
                             <n-form-item label="最大房间数">
                                 <n-input-number v-model:value="draft.srvpro.maxRooms" :min="1" />
                             </n-form-item>
+                            <n-form-item label="每秒创建房间数">
+                                <n-input-number
+                                    v-model:value="draft.srvpro.roomsPerSecond"
+                                    :min="1"
+                                    :max="100"
+                                />
+                            </n-form-item>
                         </div>
                     </n-form>
                 </n-tab-pane>
@@ -159,25 +166,6 @@ function save() {
                             </n-alert>
                         </section>
                     </div>
-                </n-tab-pane>
-
-                <n-tab-pane name="scheduler" tab="调度">
-                    <n-form label-placement="top" class="settings-form">
-                        <div class="settings-grid">
-                            <n-form-item label="双方加入间隔（毫秒）">
-                                <n-input-number v-model:value="draft.scheduler.pairDelayMs" :min="0" :max="60000" />
-                            </n-form-item>
-                            <n-form-item label="每轮创建对局数">
-                                <n-input-number v-model:value="draft.scheduler.pairsPerTick" :min="1" :max="100" />
-                            </n-form-item>
-                            <n-form-item label="调度轮询间隔（毫秒）">
-                                <n-input-number v-model:value="draft.scheduler.pollMs" :min="100" :max="60000" />
-                            </n-form-item>
-                            <n-form-item label="等待最后一批对局完成时间（分钟）">
-                                <n-input-number v-model:value="draft.scheduler.settleMinutes" :min="1" :max="1440" />
-                            </n-form-item>
-                        </div>
-                    </n-form>
                 </n-tab-pane>
 
             </n-tabs>
