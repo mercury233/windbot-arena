@@ -131,11 +131,37 @@ test('final result wait queries scores before completing when SRVPro has no room
     assert.deepEqual(service.getRevisions(), { active: 1, runs: 0, system: 0 });
 });
 
+test('final result wait does not warn when its final score query completes the run', async () => {
+    const events = [];
+    const database = {
+        addEvent(...args) { events.push(args); },
+        setRoomCount() {},
+    };
+    const service = new ArenaService({}, database);
+    const context = {
+        abortController: new AbortController(),
+        gamesPerMatchup: 1,
+        id: 'complete-settling-run',
+        latestObserved: new Map([[1, 0]]),
+        matchups: [{ id: 1 }],
+        settings: { srvpro: {} },
+    };
+    service.getRoomCount = async () => 0;
+    service.queryScores = async () => {
+        context.latestObserved.set(1, 1);
+    };
+
+    assert.equal(await service.waitForResults(context), true);
+    assert.deepEqual(events, []);
+    assert.deepEqual(service.getRevisions(), { active: 0, runs: 0, system: 0 });
+});
+
 test('pair launches use one private duel password per pair and never reuse it', async (context) => {
     const service = new ArenaService({}, {});
     const activeContext = {
         abortController: new AbortController(),
         nextPrivateRoomNumber: 123456789,
+        serverInstanceId: 'srvpro-instance',
         settings: {
             srvpro: { duelPort: 7911, host: 'srvpro.lan', roomsPerSecond: 100 },
         },
@@ -185,6 +211,7 @@ test('pair launch closes its private room when a WindBot request fails', async (
     const activeContext = {
         abortController: new AbortController(),
         nextPrivateRoomNumber: 123456789,
+        serverInstanceId: 'srvpro-instance',
         settings: {
             srvpro: {
                 duelPort: 7911,
@@ -225,7 +252,9 @@ test('pair launch closes its private room when a WindBot request fails', async (
             throw new DOMException('WindBot 请求超时', 'TimeoutError');
         }
         if (requestUrl.pathname === '/api/message') {
-            return new Response("['kick ok', 'M#123456789']");
+            return new Response("['kick ok', 'M#123456789']", {
+                headers: { 'X-Server-Instance-ID': 'srvpro-instance' },
+            });
         }
         return new Response(null, { status: 200 });
     };
@@ -266,18 +295,53 @@ test('reboot waits for SRVPro recovery when its response body is interrupted', a
             throw new TypeError('terminated');
         },
     });
-    let roomCheckCount = 0;
-    service.getRoomCount = async () => {
-        roomCheckCount++;
-        if (roomCheckCount === 1) {
+    const observedInstances = [];
+    service.fetchRooms = async () => {
+        if (observedInstances.length === 0) {
+            observedInstances.push('before-reboot');
+            return { rooms: [], serverInstanceId: 'before-reboot' };
+        }
+        if (observedInstances.length === 1) {
+            observedInstances.push('unavailable');
             throw new TypeError('fetch failed');
         }
-        return 0;
+        observedInstances.push('after-reboot');
+        return { rooms: [], serverInstanceId: 'after-reboot' };
     };
 
     await service.rebootServer(activeContext, 1);
 
-    assert.equal(roomCheckCount, 3);
+    assert.deepEqual(observedInstances, [
+        'before-reboot',
+        'unavailable',
+        'after-reboot',
+        'after-reboot',
+    ]);
+    assert.equal(activeContext.serverInstanceId, 'after-reboot');
+});
+
+test('room queries abort the task when the SRVPro instance changes', async () => {
+    const service = new ArenaService({}, {});
+    const activeContext = {
+        abortController: new AbortController(),
+        serverInstanceId: 'expected-instance',
+        settings: { srvpro: {} },
+    };
+    service.fetchRooms = async () => ({
+        rooms: [],
+        serverInstanceId: 'restarted-instance',
+    });
+
+    await assert.rejects(
+        service.getRoomCount(activeContext),
+        (error) => error.code === 'SRVPRO_INSTANCE_CHANGED'
+            && /服务可能在任务运行期间重启/.test(error.message),
+    );
+    assert.equal(activeContext.abortController.signal.aborted, true);
+    assert.equal(
+        activeContext.abortController.signal.reason.code,
+        'SRVPRO_INSTANCE_CHANGED',
+    );
 });
 
 test('deck listing keeps current decks available without an old WindBot', () => {
@@ -558,6 +622,7 @@ test('room inspection authenticates server-side and exposes only display fields'
         assert.equal(url.searchParams.get('username'), 'arena');
         assert.equal(url.searchParams.get('pass'), 'management-secret');
         return Response.json({
+            serverInstanceId: 'room-inspection-instance',
             rooms: [{
                 istart: 'Duel:2 Turn:10',
                 roomid: '2937844',
@@ -649,6 +714,7 @@ test('score polling reads the private SRVPro ranking every 15 seconds', async (c
         abortController: new AbortController(),
         finished: false,
         id: 'poll-run',
+        serverInstanceId: 'score-instance',
         settings: {
             srvpro: {
                 host: 'srvpro.lan',
@@ -669,6 +735,7 @@ test('score polling reads the private SRVPro ranking every 15 seconds', async (c
         assert.equal(url.searchParams.get('username'), 'arena');
         assert.equal(url.searchParams.get('pass'), 'management-secret');
         return Response.json({
+            serverInstanceId: 'score-instance',
             scores: [{ combo: 3, flee: 1, lose: 2, name: '新-Dragon', win: 4 }],
             type: 'private',
         });
@@ -684,6 +751,40 @@ test('score polling reads the private SRVPro ranking every 15 seconds', async (c
     ]);
 });
 
+test('score queries reject data from a restarted SRVPro instance', async (context) => {
+    const service = new ArenaService({}, {});
+    const activeContext = {
+        abortController: new AbortController(),
+        finished: false,
+        id: 'poll-run',
+        serverInstanceId: 'expected-instance',
+        settings: {
+            srvpro: {
+                host: 'srvpro.lan',
+                password: 'management-secret',
+                statusPort: 7922,
+                username: 'arena',
+            },
+        },
+    };
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async () => Response.json({
+        scores: [{ combo: 0, flee: 0, lose: 0, name: '新-Dragon', win: 1 }],
+        serverInstanceId: 'restarted-instance',
+        type: 'private',
+    });
+    let rankRecorded = false;
+    service.receiveRank = () => { rankRecorded = true; };
+
+    await assert.rejects(
+        service.queryScores(activeContext, activeContext.abortController.signal),
+        (error) => error.code === 'SRVPRO_INSTANCE_CHANGED',
+    );
+    assert.equal(rankRecorded, false);
+    assert.equal(activeContext.abortController.signal.aborted, true);
+});
+
 test('score polling continues after a transient query failure', async (context) => {
     const events = [];
     const received = [];
@@ -694,6 +795,7 @@ test('score polling continues after a transient query failure', async (context) 
         abortController: new AbortController(),
         finished: false,
         id: 'poll-run',
+        serverInstanceId: 'score-instance',
         settings: {
             srvpro: {
                 host: 'srvpro.lan',
@@ -712,7 +814,11 @@ test('score polling continues after a transient query failure', async (context) 
         if (requestCount === 1) {
             throw new TypeError('fetch failed');
         }
-        return Response.json({ scores: [], type: 'private' });
+        return Response.json({
+            scores: [],
+            serverInstanceId: 'score-instance',
+            type: 'private',
+        });
     };
     service.receiveRank = (rank) => {
         received.push(rank);

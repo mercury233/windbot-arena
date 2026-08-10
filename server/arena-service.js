@@ -31,6 +31,19 @@ function requestError(message, statusCode = 400) {
     return error;
 }
 
+function getServerInstanceId(response, body) {
+    const bodyId = body?.serverInstanceId;
+    const headerId = response.headers?.get?.('x-server-instance-id');
+    const serverInstanceId = bodyId || headerId;
+    if (typeof serverInstanceId !== 'string' || serverInstanceId === '') {
+        throw new Error('SRVPro API 响应中没有有效的 serverInstanceId');
+    }
+    if (bodyId && headerId && bodyId !== headerId) {
+        throw new Error('SRVPro API 响应中的 serverInstanceId 不一致');
+    }
+    return serverInstanceId;
+}
+
 function isAbortError(error) {
     return error?.name === 'AbortError' || error?.code === 'ABORT_ERR';
 }
@@ -151,7 +164,7 @@ class ArenaService {
         const { settings } = this.database.getArenaSettings();
         let rooms;
         try {
-            rooms = await this.fetchRooms(settings.srvpro);
+            ({ rooms } = await this.fetchRooms(settings.srvpro));
         } catch (error) {
             throw requestError(`无法查询 SRVPro 房间: ${error.message}`, 502);
         }
@@ -575,7 +588,10 @@ class ArenaService {
         if (body.rooms.some((room) => room?.roomid === '0' && room?.roomname === '密码错误')) {
             throw new Error('SRVPro 管理账号或密码错误');
         }
-        return body.rooms;
+        return {
+            rooms: body.rooms,
+            serverInstanceId: getServerInstanceId(response, body),
+        };
     }
 
     async queryScores(context, signal) {
@@ -592,6 +608,7 @@ class ArenaService {
         if (body?.type !== 'private' || !Array.isArray(body.scores)) {
             throw new Error('排行 API 响应格式无效');
         }
+        this.assertServerInstance(context, getServerInstanceId(response, body));
         const rank = body.scores.map((score, index) => {
             if (!score || typeof score !== 'object' || Array.isArray(score)) {
                 throw new Error(`排行 API 的 scores[${index}] 不是对象`);
@@ -645,21 +662,41 @@ class ArenaService {
     }
 
     async getRoomCount(context) {
-        const rooms = await this.fetchRooms(
+        const { rooms, serverInstanceId } = await this.fetchRooms(
             context.settings.srvpro,
             context.abortController.signal,
         );
+        this.assertServerInstance(context, serverInstanceId);
         return rooms.length;
+    }
+
+    assertServerInstance(context, serverInstanceId) {
+        if (!context.serverInstanceId) {
+            throw new Error('任务尚未记录 SRVPro serverInstanceId');
+        }
+        if (serverInstanceId === context.serverInstanceId) {
+            return;
+        }
+        const error = new Error(
+            `SRVPro 实例已变化（${context.serverInstanceId} -> ${serverInstanceId}），服务可能在任务运行期间重启`,
+        );
+        error.code = 'SRVPRO_INSTANCE_CHANGED';
+        if (!context.abortController.signal.aborted) {
+            context.abortController.abort(error);
+        }
+        throw error;
     }
 
     async rebootServer(context, pollIntervalMs = 1000) {
         const srvpro = context.settings.srvpro;
+        const previousServerInstanceId = (
+            await this.fetchRooms(srvpro, context.abortController.signal)
+        ).serverInstanceId;
         const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/message');
         url.searchParams.set('username', srvpro.username);
         url.searchParams.set('pass', srvpro.password);
         url.searchParams.set('reboot', context.id);
 
-        let rebootAccepted = false;
         let response;
         let body;
         let responseRead = false;
@@ -680,25 +717,36 @@ class ArenaService {
             if (!body.includes('reboot ok')) {
                 throw new Error(`无法确认服务端重启: ${body}`);
             }
-            rebootAccepted = true;
         }
 
         const deadline = Date.now() + 120000;
+        let recoveredServerInstanceId = null;
         let consecutiveSuccesses = 0;
-        let sawUnavailable = false;
         await sleep(pollIntervalMs, context.abortController.signal);
         while (Date.now() < deadline) {
             try {
-                await this.getRoomCount(context);
-                consecutiveSuccesses++;
-                if ((rebootAccepted || sawUnavailable) && consecutiveSuccesses >= 2) {
+                const { serverInstanceId } = await this.fetchRooms(
+                    srvpro,
+                    context.abortController.signal,
+                );
+                if (serverInstanceId === previousServerInstanceId) {
+                    recoveredServerInstanceId = null;
+                    consecutiveSuccesses = 0;
+                } else if (serverInstanceId === recoveredServerInstanceId) {
+                    consecutiveSuccesses++;
+                } else {
+                    recoveredServerInstanceId = serverInstanceId;
+                    consecutiveSuccesses = 1;
+                }
+                if (consecutiveSuccesses >= 2) {
+                    context.serverInstanceId = recoveredServerInstanceId;
                     return;
                 }
             } catch (error) {
                 if (context.abortController.signal.aborted) {
                     throw context.abortController.signal.reason;
                 }
-                sawUnavailable = true;
+                recoveredServerInstanceId = null;
                 consecutiveSuccesses = 0;
             }
             await sleep(pollIntervalMs, context.abortController.signal);
@@ -752,6 +800,7 @@ class ArenaService {
         url.searchParams.set('kick', password);
         const response = await fetchWithTimeout(url, 5000);
         const body = await response.text();
+        this.assertServerInstance(context, getServerInstanceId(response));
         if (!response.ok || body.includes('密码错误')) {
             throw new Error(`SRVPro 拒绝关闭房间: HTTP ${response.status} ${body}`);
         }
@@ -908,6 +957,13 @@ class ArenaService {
                     }
                     await sleep(SCHEDULE_POLL_MS, context.abortController.signal);
                     continue;
+                }
+                const completeAfterFinalQuery = context.matchups.every(
+                    (matchup) => (context.latestObserved.get(matchup.id) || 0)
+                        >= context.gamesPerMatchup,
+                );
+                if (completeAfterFinalQuery) {
+                    return true;
                 }
                 this.database.addEvent(
                     context.id,
