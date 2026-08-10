@@ -18,7 +18,7 @@ WindBot 有两种运行方式：
 - 本地模式：Arena 负责启动和关闭 `WindBot.exe`，并直接读取本地 `bot.conf`。
 - 远程模式：用户手动运行 WindBot Server，Arena 只调用远程 HTTP 端点；由于无法读取远端文件系统，`bot.conf` 内容由用户在网页粘贴并保存在 SQLite。
 
-Arena 为每组 Bot 生成 `M#123456789` 形式的唯一约战房名并传给双方。SRVPro 会保证相同房名的双方进入同一房间，并把普通约战结果记录到独立的 `private_duel` 累计排行。约战房名不是用户配置。任务运行中 Arena 每 15 秒使用管理凭据通过 SRVPro 的 `GET /api/getscores?type=private` 主动查询累计排行。管理账号查询排行需要 `get_private_scores` 权限，清理房间和重启服务还分别需要 `kick_user` 和 `stop` 权限。
+Arena 为每组 Bot 生成 `M#123456789` 形式的唯一约战房名并传给双方。SRVPro 会保证相同房名的双方进入同一房间，并把普通约战结果记录到累计排行。约战房名不是用户配置。任务运行中 Arena 使用 `GET /api/getroomscount` 查询轻量房间计数，并每 15 秒使用管理凭据通过 `GET /api/getscores` 主动查询累计排行；清理房间和重启服务同样使用管理接口。
 
 ## 对局配对与统计限制
 
@@ -89,7 +89,7 @@ ORDER BY matchups.ai_level IS NULL, matchups.ai_level DESC, matchups.label;
 
 在开发中，可以读取以下项目的源码。相对本项目根目录：
 
-- `../ygopro-server`：SRVPro 源码。房间与排行 API 行为参考 `ygopro-server.coffee`（编译产物为 `ygopro-server.js`）；约战排行通过 `/api/getscores?type=private` 查询。
+- `../arena-srvpro`：SRVPro 源码。房间与排行 API 行为参考 `index.js`；房间计数和约战排行分别通过 `/api/getroomscount` 与 `/api/getscores` 查询。
 - `../windbot`：WindBot 源码。ServerMode 的 HTTP 请求协议参考 `Program.cs`，卡组与运行资源也以该项目的实现为准。
 
 ## 验证重点

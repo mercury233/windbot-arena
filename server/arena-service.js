@@ -16,9 +16,9 @@ const {
 } = require('./bot-config');
 const { normalizeRank } = require('./stats');
 
-// 单独的 M 会进入随机队列；M#… 会创建可统计的普通 Match 房间，且需放入 WindBot 的 20 字符房名字段。
-const PRIVATE_DUEL_ROOM_MIN = 100000000;
-const PRIVATE_DUEL_ROOM_MAX = 999999999;
+// M#… 会创建可统计的普通 Match 房间，长度应小于 YGOPro / WindBot 的 20 字符房名字段。
+const DUEL_ROOM_MIN = 100000000;
+const DUEL_ROOM_MAX = 999999999;
 const MAX_WINDBOT_OUTPUT_LENGTH = 2000000;
 const SCORE_POLL_MS = 15000;
 const SCHEDULE_POLL_MS = 1000;
@@ -453,9 +453,9 @@ class ArenaService {
                 launchedGames: 0,
             })),
             nextMatchupIndex: 0,
-            nextPrivateRoomNumber: crypto.randomInt(
-                PRIVATE_DUEL_ROOM_MIN,
-                PRIVATE_DUEL_ROOM_MAX + 1,
+            nextRoomNumber: crypto.randomInt(
+                DUEL_ROOM_MIN,
+                DUEL_ROOM_MAX + 1,
             ),
             settings: {
                 srvpro: structuredClone(srvpro),
@@ -649,10 +649,27 @@ class ArenaService {
         };
     }
 
+    async fetchRoomCount(srvpro, signal) {
+        const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/getroomscount');
+        url.searchParams.set('username', srvpro.username);
+        url.searchParams.set('pass', srvpro.password);
+        const response = await fetchWithTimeout(url, 5000, signal);
+        if (!response.ok) {
+            throw new Error(`房间计数 API 返回 HTTP ${response.status}`);
+        }
+        const body = await response.json();
+        if (!Number.isSafeInteger(body?.count) || body.count < 0) {
+            throw new Error('房间计数 API 响应中没有有效的 count');
+        }
+        return {
+            count: body.count,
+            serverInstanceId: getServerInstanceId(response, body),
+        };
+    }
+
     async queryScores(context, signal) {
         const srvpro = context.settings.srvpro;
         const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/getscores');
-        url.searchParams.set('type', 'private');
         url.searchParams.set('username', srvpro.username);
         url.searchParams.set('pass', srvpro.password);
         const response = await fetchWithTimeout(url, 5000, signal);
@@ -660,7 +677,7 @@ class ArenaService {
             throw new Error(`排行 API 返回 HTTP ${response.status}`);
         }
         const body = await response.json();
-        if (body?.type !== 'private' || !Array.isArray(body.scores)) {
+        if (!Array.isArray(body?.scores)) {
             throw new Error('排行 API 响应格式无效');
         }
         this.assertServerInstance(context, getServerInstanceId(response, body));
@@ -728,12 +745,12 @@ class ArenaService {
     }
 
     async getRoomCount(context) {
-        const { rooms, serverInstanceId } = await this.fetchRooms(
+        const { count, serverInstanceId } = await this.fetchRoomCount(
             context.settings.srvpro,
             context.abortController.signal,
         );
         this.assertServerInstance(context, serverInstanceId);
-        return rooms.length;
+        return count;
     }
 
     assertServerInstance(context, serverInstanceId) {
@@ -756,7 +773,7 @@ class ArenaService {
     async rebootServer(context, pollIntervalMs = 1000) {
         const srvpro = context.settings.srvpro;
         const previousServerInstanceId = (
-            await this.fetchRooms(srvpro, context.abortController.signal)
+            await this.fetchRoomCount(srvpro, context.abortController.signal)
         ).serverInstanceId;
         const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/message');
         url.searchParams.set('username', srvpro.username);
@@ -791,7 +808,7 @@ class ArenaService {
         await sleep(pollIntervalMs, context.abortController.signal);
         while (Date.now() < deadline) {
             try {
-                const { serverInstanceId } = await this.fetchRooms(
+                const { serverInstanceId } = await this.fetchRoomCount(
                     srvpro,
                     context.abortController.signal,
                 );
@@ -820,11 +837,11 @@ class ArenaService {
         throw new Error('服务端在重启后 120 秒内没有恢复');
     }
 
-    nextPrivateDuelPassword(context) {
-        const roomNumber = context.nextPrivateRoomNumber
-            ?? crypto.randomInt(PRIVATE_DUEL_ROOM_MIN, PRIVATE_DUEL_ROOM_MAX + 1);
-        context.nextPrivateRoomNumber = roomNumber === PRIVATE_DUEL_ROOM_MAX
-            ? PRIVATE_DUEL_ROOM_MIN
+    nextDuelPassword(context) {
+        const roomNumber = context.nextRoomNumber
+            ?? crypto.randomInt(DUEL_ROOM_MIN, DUEL_ROOM_MAX + 1);
+        context.nextRoomNumber = roomNumber === DUEL_ROOM_MAX
+            ? DUEL_ROOM_MIN
             : roomNumber + 1;
         return `M#${roomNumber}`;
     }
@@ -867,7 +884,7 @@ class ArenaService {
         }
     }
 
-    async closePrivateDuelRoom(context, password) {
+    async closeDuelRoom(context, password) {
         const srvpro = context.settings.srvpro;
         const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/message');
         url.searchParams.set('username', srvpro.username);
@@ -887,7 +904,7 @@ class ArenaService {
     async launchPair(context, players) {
         const roomsPerSecond = context.settings.srvpro.roomsPerSecond ?? 1;
         const joinDelayMs = SCHEDULE_POLL_MS / (roomsPerSecond * 2);
-        const password = this.nextPrivateDuelPassword(context);
+        const password = this.nextDuelPassword(context);
         try {
             await this.addBot(context, players[0], password);
             await sleep(joinDelayMs, context.abortController.signal);
@@ -895,7 +912,7 @@ class ArenaService {
             await sleep(joinDelayMs, context.abortController.signal);
         } catch (error) {
             try {
-                await this.closePrivateDuelRoom(context, password);
+                await this.closeDuelRoom(context, password);
             } catch (cleanupError) {
                 if (!isAbortError(error)) {
                     throw new Error(
