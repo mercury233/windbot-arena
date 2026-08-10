@@ -272,6 +272,66 @@ test('pair launch closes its private room when a WindBot request fails', async (
     assert.equal(cleanupUrl.searchParams.get('kick'), 'M#123456789');
 });
 
+test('WindBot 404 distinguishes a missing challenger from other missing decks', async (context) => {
+    const service = new ArenaService({}, {});
+    const activeContext = {
+        abortController: new AbortController(),
+        kind: 'challenge',
+        settings: {
+            srvpro: { duelPort: 7911, host: 'srvpro.lan' },
+        },
+    };
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async () => new Response(null, { status: 404 });
+
+    await assert.rejects(
+        service.addBot(activeContext, {
+            deck: 'MissingTarget',
+            endpointHost: 'current.lan',
+            endpointPort: 2399,
+            rankName: 'target',
+            source: 'target',
+        }, 'M#123456789'),
+        (error) => error.code === 'WINDBOT_DECK_NOT_FOUND'
+            && error.message === '挑战者卡组“MissingTarget”在对应的 WindBot 中不存在',
+    );
+    await assert.rejects(
+        service.addBot(activeContext, {
+            deck: 'MissingOpponent',
+            endpointHost: 'current.lan',
+            endpointPort: 2399,
+            rankName: '对手-MissingOpponent',
+            source: 'opponent',
+        }, 'M#123456790'),
+        (error) => error.code === 'WINDBOT_DECK_NOT_FOUND'
+            && error.message === '对手-MissingOpponent 使用的卡组“MissingOpponent”在对应的 WindBot 中不存在，请检查 bot.conf 与 WindBot 版本是否匹配',
+    );
+});
+
+test('scheduler stops immediately when WindBot reports a missing deck', async () => {
+    const events = [];
+    const service = new ArenaService({}, {
+        addEvent(...args) { events.push(args); },
+        setRoomCount() {},
+    });
+    const context = makeSchedulingContext('challenge', ['MissingTarget']);
+    context.gamesPerMatchup = 1;
+    context.totalGames = 1;
+    service.getRoomCount = async () => 0;
+    let launchCount = 0;
+    service.launchMatchup = async () => {
+        launchCount++;
+        const error = new Error('挑战者卡组不存在');
+        error.code = 'WINDBOT_DECK_NOT_FOUND';
+        throw error;
+    };
+
+    await assert.rejects(service.scheduleGames(context), /挑战者卡组不存在/);
+    assert.equal(launchCount, 1);
+    assert.deepEqual(events, []);
+});
+
 test('reboot waits for SRVPro recovery when its response body is interrupted', async (context) => {
     const service = new ArenaService({}, {});
     const activeContext = {

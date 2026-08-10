@@ -854,6 +854,15 @@ class ArenaService {
             throw new Error(`${competitor.rankName} 调用 WindBot 失败: ${error.message}`, { cause: error });
         }
         if (!response.ok) {
+            if (response.status === 404) {
+                const isChallengeTarget = context.kind === 'challenge'
+                    && competitor.source === 'target';
+                const error = new Error(isChallengeTarget
+                    ? `挑战者卡组“${competitor.deck}”在对应的 WindBot 中不存在`
+                    : `${competitor.rankName} 使用的卡组“${competitor.deck}”在对应的 WindBot 中不存在，请检查 bot.conf 与 WindBot 版本是否匹配`);
+                error.code = 'WINDBOT_DECK_NOT_FOUND';
+                throw error;
+            }
             throw new Error(`${competitor.rankName} 调用 WindBot 返回 HTTP ${response.status}`);
         }
     }
@@ -975,6 +984,9 @@ class ArenaService {
             } catch (error) {
                 if (context.abortController.signal.aborted) {
                     throw context.abortController.signal.reason;
+                }
+                if (error?.code === 'WINDBOT_DECK_NOT_FOUND') {
+                    throw error;
                 }
                 consecutiveErrors++;
                 this.database.addEvent(context.id, 'warning', 'schedule-error', error.message);
