@@ -385,6 +385,17 @@ class ArenaDatabase {
         return Number(this.db.prepare('SELECT COUNT(*) AS count FROM runs').get().count);
     }
 
+    deleteRun(runId) {
+        return this.transaction(() => {
+            const run = this.db.prepare('SELECT status FROM runs WHERE id = ?').get(runId);
+            if (!run || activeStatuses.includes(run.status)) {
+                return false;
+            }
+            this.db.prepare('DELETE FROM rank_reports WHERE run_id = ?').run(runId);
+            return this.db.prepare('DELETE FROM runs WHERE id = ?').run(runId).changes === 1;
+        });
+    }
+
     findActiveRuns() {
         const placeholders = activeStatuses.map(() => '?').join(', ');
         const rows = this.db.prepare(`

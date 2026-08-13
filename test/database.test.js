@@ -139,6 +139,14 @@ test('ArenaDatabase persists a run and applies rank statistics', (context) => {
         SELECT * FROM matchups WHERE run_id = ? ORDER BY ordinal
     `).all('run-1');
     assert.match(plan.map((row) => row.detail).join(' '), /idx_matchups_run_id/);
+
+    assert.equal(database.deleteRun('run-1'), false);
+    database.setRunStatus('run-1', 'completed', { finishedAt: '2026-08-08T00:10:00.000Z' });
+    assert.equal(database.deleteRun('run-1'), true);
+    assert.equal(database.getRun('run-1'), null);
+    assert.equal(database.db.prepare('SELECT COUNT(*) AS count FROM matchups WHERE run_id = ?').get('run-1').count, 0);
+    assert.equal(database.db.prepare('SELECT COUNT(*) AS count FROM run_events WHERE run_id = ?').get('run-1').count, 0);
+    assert.equal(database.db.prepare('SELECT COUNT(*) AS count FROM rank_reports WHERE run_id = ?').get('run-1').count, 0);
 });
 
 test('ArenaDatabase derives challenge results from each opponent ranking', (context) => {

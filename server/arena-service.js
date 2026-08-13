@@ -24,6 +24,7 @@ const SCORE_POLL_MS = 15000;
 const SCHEDULE_POLL_MS = 1000;
 const SETTLE_TIMEOUT_MS = 10 * 60 * 1000;
 const USER_STOP_REASON = '用户从 Web 界面停止了测试';
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'stopped', 'failed', 'interrupted']);
 
 function requestError(message, statusCode = 400) {
     const error = new Error(message);
@@ -1149,6 +1150,21 @@ class ArenaService {
             this.markChanged('stopping');
         }
         return this.database.getRun(runId);
+    }
+
+    deleteRun(runId) {
+        const run = this.database.getRun(runId);
+        if (!run) {
+            throw requestError('运行记录不存在', 404);
+        }
+        if (!TERMINAL_RUN_STATUSES.has(run.status)) {
+            throw requestError('运行中的任务不能删除，请先停止任务', 409);
+        }
+        if (!this.database.deleteRun(runId)) {
+            throw requestError('运行记录不存在', 404);
+        }
+        this.revisions.runs++;
+        return run;
     }
 
     async finish(context, status, reason, error = null) {

@@ -28,6 +28,7 @@ test('settings, room, WindBot and run APIs return service data', async (context)
     let savedSettings;
     let refreshedDecks = false;
     let requestedRunPage;
+    let deletedRunId;
     const publicRecord = {
         secretStatus: { srvpros: { 'srvpro-1': { passwordConfigured: true } } },
         settings: { srvpros: [{ id: 'srvpro-1', password: '' }] },
@@ -44,6 +45,9 @@ test('settings, room, WindBot and run APIs return service data', async (context)
         updateSettings: (settings) => {
             savedSettings = settings;
             return publicRecord;
+        },
+        deleteRun: (runId) => {
+            deletedRunId = runId;
         },
     };
     const database = {
@@ -93,6 +97,9 @@ test('settings, room, WindBot and run APIs return service data', async (context)
     assert.deepEqual(await (await fetch(`${baseUrl}/api/runs/active`)).json(), {
         runs: [{ id: 'run-active', srvproId: 'srvpro-1' }],
     });
+    const deleteResponse = await fetch(`${baseUrl}/api/runs/run-21`, { method: 'DELETE' });
+    assert.equal(deleteResponse.status, 204);
+    assert.equal(deletedRunId, 'run-21');
 
 });
 

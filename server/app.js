@@ -107,6 +107,15 @@ function createApp(config, database, arenaService, shutdownSignal) {
         }
     });
 
+    app.delete('/api/runs/:id', (request, response, next) => {
+        try {
+            arenaService.deleteRun(request.params.id);
+            response.status(204).end();
+        } catch (error) {
+            next(error);
+        }
+    });
+
     app.get('/api/events', (request, response) => {
         response.set({
             'Cache-Control': 'no-cache',

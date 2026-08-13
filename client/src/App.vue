@@ -43,6 +43,7 @@ const system = ref(null);
 const runs = ref([]);
 const historyPage = ref(1);
 const historyTotal = ref(0);
+const deletingRunId = ref('');
 const activeRuns = ref([]);
 const selectedRun = ref(null);
 const selectedSrvproId = ref('');
@@ -540,6 +541,33 @@ function selectSrvpro(srvproId) {
 function selectHistoryPage(page) {
     historyPage.value = page;
     refresh(['runs']).catch((error) => message.error(error.message));
+}
+
+async function deleteRun(runId) {
+    deletingRunId.value = runId;
+    try {
+        await api(`/api/runs/${runId}`, { method: 'DELETE' });
+        if (selectedRun.value?.id === runId) {
+            runSelectionRequest += 1;
+            selectedRun.value = null;
+        }
+        const remainingTotal = Math.max(0, historyTotal.value - 1);
+        const lastPage = Math.max(1, Math.ceil(remainingTotal / historyPageSize));
+        historyPage.value = Math.min(historyPage.value, lastPage);
+        await refresh(['runs', 'active']);
+        message.success('运行历史已删除');
+    } catch (error) {
+        message.error(error.message);
+    } finally {
+        deletingRunId.value = '';
+    }
+}
+
+function shouldConfirmRunDeletion(run) {
+    const shortTerminalRun = (run.status === 'stopped' || run.status === 'interrupted')
+        && getRunElapsedMilliseconds(run) <= 30_000;
+    return run.status !== 'failed'
+        && !shortTerminalRun;
 }
 
 async function openSettings() {
@@ -1602,26 +1630,46 @@ onBeforeUnmount(() => {
                                 <span>{{ historyTotal }}</span>
                             </div>
                             <div v-if="runs.length" class="history-list">
-                                <button
+                                <div
                                     v-for="run in runs"
                                     :key="run.id"
-                                    class="history-item"
+                                    class="history-entry"
                                     :class="{ active: displayedRun?.id === run.id }"
-                                    @click="selectRun(run.id)"
                                 >
-                                    <span class="history-status" :class="`status-${run.status}`"></span>
-                                    <span class="history-main">
-                                        <strong :title="formatHistoryTitle(run)">
-                                            {{ formatHistoryTitle(run) }}
-                                        </strong>
-                                        <small>
-                                            {{ formatDate(run.createdAt) }}
-                                            · {{ formatDuration(getRunElapsedMilliseconds(run)) }}
-                                            · {{ statusLabels[run.status] }}
-                                        </small>
-                                    </span>
-                                    <code>{{ run.id.slice(0, 8).toUpperCase() }}</code>
-                                </button>
+                                    <button class="history-item" @click="selectRun(run.id)">
+                                        <span class="history-status" :class="`status-${run.status}`"></span>
+                                        <span class="history-main">
+                                            <strong :title="formatHistoryTitle(run)">
+                                                {{ formatHistoryTitle(run) }}
+                                            </strong>
+                                            <small>
+                                                {{ formatDate(run.createdAt) }}
+                                                · {{ formatDuration(getRunElapsedMilliseconds(run)) }}
+                                                · {{ statusLabels[run.status] }}
+                                            </small>
+                                        </span>
+                                        <code>{{ run.id.slice(0, 8).toUpperCase() }}</code>
+                                    </button>
+                                    <n-popconfirm
+                                        v-if="terminalStatuses.has(run.status)"
+                                        :disabled="!shouldConfirmRunDeletion(run)"
+                                        @positive-click="deleteRun(run.id)"
+                                    >
+                                        <template #trigger>
+                                            <button
+                                                class="history-delete"
+                                                type="button"
+                                                title="删除运行历史"
+                                                :aria-label="`删除运行历史 ${formatHistoryTitle(run)}`"
+                                                :disabled="deletingRunId === run.id"
+                                                @click.stop="!shouldConfirmRunDeletion(run) && deleteRun(run.id)"
+                                            >
+                                                ×
+                                            </button>
+                                        </template>
+                                        确定删除这项运行历史？此操作无法撤销。
+                                    </n-popconfirm>
+                                </div>
                             </div>
                             <div v-if="historyTotal > historyPageSize" class="history-pagination">
                                 <n-button

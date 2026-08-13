@@ -526,6 +526,26 @@ test('state revisions separate static, history and active-run changes', () => {
     assert.deepEqual(service.getRevisions(), { active: 6, runs: 1, system: 1 });
 });
 
+test('run deletion only accepts terminal history and updates its revision', () => {
+    const records = new Map([
+        ['finished-run', { id: 'finished-run', status: 'completed' }],
+        ['active-run', { id: 'active-run', status: 'running' }],
+    ]);
+    const service = new ArenaService({}, {
+        deleteRun(runId) {
+            return records.delete(runId);
+        },
+        getRun(runId) {
+            return records.get(runId) || null;
+        },
+    });
+
+    assert.equal(service.deleteRun('finished-run').id, 'finished-run');
+    assert.deepEqual(service.getRevisions(), { active: 0, runs: 1, system: 0 });
+    assert.throws(() => service.deleteRun('active-run'), { statusCode: 409 });
+    assert.throws(() => service.deleteRun('missing-run'), { statusCode: 404 });
+});
+
 test('startup events update the active-run revision while WindBot is still starting', async () => {
     const eventTypes = [];
     const database = {
