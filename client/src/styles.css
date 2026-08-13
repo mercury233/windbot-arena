@@ -715,10 +715,6 @@ input {
     color: #63e6d3;
 }
 
-.primary-metric.has-progress {
-    padding-bottom: 9px;
-}
-
 .primary-metric .progress-value {
     font-size: 18px;
     line-height: 1;
@@ -809,10 +805,6 @@ input {
 .result-table .ranking-position {
     color: #769099;
     font-size: 15px;
-}
-
-.ranking-table tbody tr:first-child .ranking-position {
-    color: #63e6d3;
 }
 
 .result-table .deck-win-rate.is-significant-win {
@@ -1401,10 +1393,6 @@ html[data-theme='light'] body .instance-heading span {
 
     .metric strong {
         font-size: 20px;
-    }
-
-    .primary-metric.has-progress {
-        padding-bottom: 0;
     }
 
     .launch-actions {

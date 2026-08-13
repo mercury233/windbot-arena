@@ -4,8 +4,10 @@ import {
     NAlert,
     NAutoComplete,
     NButton,
+    NButtonGroup,
     NCard,
     NCheckbox,
+    NDropdown,
     NEmpty,
     NInputNumber,
     NModal,
@@ -338,7 +340,22 @@ const rankingRows = computed(() => {
         || left.label.localeCompare(right.label)
     ));
 });
+const regressionRetestDecks = computed(() => {
+    const availableDecks = new Set(regressionDeckOptions.value.map((option) => option.value));
+    return regressionRows.value
+        .filter((matchup) => (
+            matchup.observedGames >= 100
+            && (matchup.currentWinRate > 0.55 || matchup.currentWinRate < 0.45)
+            && availableDecks.has(matchup.label)
+        ))
+        .map((matchup) => matchup.label);
+});
 const rankingLeader = computed(() => rankingRows.value.find((item) => item.observedGames > 0) || null);
+const resultDownloadOptions = [
+    { label: '下载文本', key: 'text' },
+    { label: '下载 Markdown', key: 'markdown' },
+    { label: '下载 JSON', key: 'json' },
+];
 const elapsedMilliseconds = computed(() => {
     return getRunElapsedMilliseconds(displayedRun.value);
 });
@@ -788,89 +805,182 @@ async function copyRoomName(name) {
     }
 }
 
-async function copyResults() {
-    const run = displayedRun.value;
-    if (!run) {
-        return;
+function serializeResults(run, format) {
+    if (format === 'json') {
+        return JSON.stringify({
+            exportedAt: new Date().toISOString(),
+            run: {
+                id: run.id,
+                kind: run.kind,
+                kindLabel: runKindLabels[run.kind] || '实验结果',
+                status: run.status,
+                statusLabel: statusLabels[run.status] || run.status,
+                createdAt: run.createdAt,
+                startedAt: run.startedAt,
+                finishedAt: run.finishedAt,
+                observedGames: run.observedGames,
+                launchedGames: run.launchedGames,
+                totalGames: run.totalGames,
+                gamesPerMatchup: run.gamesPerMatchup,
+                config: run.config,
+            },
+            summary: {
+                elapsedMilliseconds: elapsedMilliseconds.value,
+                currentWinRate: run.kind === 'ranking' ? null : currentWinRate.value,
+                rankingLeader: run.kind === 'ranking' && rankingLeader.value ? {
+                    deck: rankingLeader.value.label,
+                    winRate: rankingLeader.value.currentWinRate,
+                } : null,
+            },
+            matchups: run.matchups,
+        }, null, 2);
     }
 
-    const lines = [
-        `WindBot Arena · ${runKindLabels[run.kind] || '实验结果'}`,
-        `任务 ID：${run.id}`,
-        `状态：${statusLabels[run.status] || run.status}`,
-        `创建时间：${formatDate(run.createdAt)}`,
-        `已完成对局：${run.observedGames}`,
-        `已创建对局：${run.launchedGames}${run.kind !== 'ranking' ? ` / ${run.totalGames}` : ''}`,
+    const summary = [
+        ['任务 ID', run.id],
+        ['状态', statusLabels[run.status] || run.status],
+        ['创建时间', formatDate(run.createdAt)],
+        ['已完成对局', run.observedGames],
+        ['已创建对局', `${run.launchedGames}${run.kind !== 'ranking' ? ` / ${run.totalGames}` : ''}`],
     ];
     if (run.kind === 'ranking') {
-        lines.push(`当前榜首：${rankingLeader.value
+        summary.push(['当前榜首', rankingLeader.value
             ? `${rankingLeader.value.label}（${formatPercent(rankingLeader.value.currentWinRate)}）`
-            : '统计中'}`);
+            : '统计中']);
     } else {
         if (run.kind === 'challenge') {
-            lines.push(`挑战者卡组：${run.config?.targetDeck || '—'}`);
-            lines.push(`挑战者版本：${run.config?.challengerVersion === 'old' ? '旧版' : '新版'}`);
+            summary.push(['挑战者卡组', run.config?.targetDeck || '—']);
+            summary.push(['挑战者版本', run.config?.challengerVersion === 'old' ? '旧版' : '新版']);
             if (run.challengeTargetFlee > 0) {
-                lines.push(`挑战者卡组合计逃跑：${run.challengeTargetFlee}`);
+                summary.push(['挑战者卡组合计逃跑', run.challengeTargetFlee]);
             }
         }
-        lines.push(`${run.kind === 'challenge' ? '挑战者卡组' : '新版'}总胜率：${formatPercent(currentWinRate.value)}`);
+        summary.push([
+            `${run.kind === 'challenge' ? '挑战者卡组' : '新版'}总胜率`,
+            formatPercent(currentWinRate.value),
+        ]);
     }
-    lines.push(`已用时间：${formatDuration(elapsedMilliseconds.value)}`, '');
+    summary.push(['已用时间', formatDuration(elapsedMilliseconds.value)]);
 
+    let columns;
+    let rows;
     if (run.kind === 'regression') {
-        lines.push('卡组\t等级 / Bot\t统计进度\t胜 / 负 / 逃\t新版胜率');
-        for (const matchup of regressionRows.value) {
+        columns = ['卡组', '等级 / Bot', '统计进度', '胜 / 负 / 逃', '新版胜率'];
+        rows = regressionRows.value.map((matchup) => {
             const competitor = matchup.competitors[0];
-            lines.push([
+            return [
                 matchup.label,
                 `${matchup.aiLevel ? `LV${matchup.aiLevel} / ` : ''}${competitor?.botLabel || '—'}`,
                 `${matchup.observedGames} / ${matchup.targetGames}`,
                 `${competitor?.win || 0} / ${competitor?.lose || 0} / ${competitor?.flee || 0}`,
                 formatPercent(matchup.currentWinRate),
-            ].join('\t'));
-        }
+            ];
+        });
     } else if (run.kind === 'challenge') {
-        lines.push('对手卡组\t等级 / Bot\t统计进度\t挑战者卡组 胜 / 负\t对手逃跑\t挑战者卡组胜率');
-        for (const matchup of challengeRows.value) {
+        columns = ['对手卡组', '等级 / Bot', '统计进度', '挑战者卡组 胜 / 负', '对手逃跑', '挑战者卡组胜率'];
+        rows = challengeRows.value.map((matchup) => {
             const competitor = matchup.competitors[0];
-            lines.push([
+            return [
                 matchup.label,
                 `${matchup.aiLevel ? `LV${matchup.aiLevel} / ` : ''}${matchup.competitors[1]?.botLabel || '—'}`,
                 `${matchup.observedGames} / ${matchup.targetGames}`,
                 `${competitor?.win || 0} / ${competitor?.lose || 0}`,
                 matchup.competitors[1]?.flee || 0,
                 formatPercent(matchup.currentWinRate),
-            ].join('\t'));
-        }
+            ];
+        });
     } else {
-        lines.push('排名\t卡组\t等级 / Bot\t已统计 / 已创建\t胜 / 负 / 逃\t胜率');
-        rankingRows.value.forEach((entry, index) => {
+        columns = ['排名', '卡组', '等级 / Bot', '已统计 / 已创建', '胜 / 负 / 逃', '胜率'];
+        rows = rankingRows.value.map((entry, index) => {
             const competitor = entry.competitors[0];
-            lines.push([
+            return [
                 index + 1,
                 entry.label,
                 `${entry.aiLevel ? `LV${entry.aiLevel} / ` : ''}${competitor?.botLabel || '—'}`,
                 `${entry.observedGames} / ${entry.launchedGames}`,
                 `${competitor?.win || 0} / ${competitor?.lose || 0} / ${competitor?.flee || 0}`,
                 formatPercent(entry.currentWinRate),
-            ].join('\t'));
+            ];
         });
     }
 
-    const text = lines.join('\n');
+    if (format === 'markdown') {
+        const escapeCell = (value) => String(value).replaceAll('|', '\\|').replaceAll('\n', '<br>');
+        return [
+            `# WindBot Arena · ${runKindLabels[run.kind] || '实验结果'}`,
+            '',
+            ...summary.map(([label, value]) => `- ${label}：${value}`),
+            '',
+            `| ${columns.map(escapeCell).join(' | ')} |`,
+            `| ${columns.map(() => '---').join(' | ')} |`,
+            ...rows.map((row) => `| ${row.map(escapeCell).join(' | ')} |`),
+            '',
+        ].join('\n');
+    }
+
+    return [
+        `WindBot Arena · ${runKindLabels[run.kind] || '实验结果'}`,
+        ...summary.map(([label, value]) => `${label}：${value}`),
+        '',
+        columns.join('\t'),
+        ...rows.map((row) => row.join('\t')),
+    ].join('\n');
+}
+
+async function copyResults() {
+    const run = displayedRun.value;
+    if (!run) {
+        return;
+    }
+
     try {
-        await writeClipboard(text);
+        await writeClipboard(serializeResults(run, 'text'));
         message.success('实验结果已复制为文本');
     } catch (error) {
         message.error(`复制失败：${error.message}`);
     }
 }
 
+function downloadResults(format) {
+    const run = displayedRun.value;
+    if (!run) {
+        return;
+    }
+
+    const fileTypes = {
+        text: { extension: 'txt', mime: 'text/plain;charset=utf-8' },
+        markdown: { extension: 'md', mime: 'text/markdown;charset=utf-8' },
+        json: { extension: 'json', mime: 'application/json;charset=utf-8' },
+    };
+    const fileType = fileTypes[format];
+    if (!fileType) {
+        return;
+    }
+
+    const content = serializeResults(run, format);
+    const blob = new Blob(format === 'json' ? [content] : ['\ufeff', content], { type: fileType.mime });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `windbot-arena-${run.kind}-${run.id.slice(0, 8)}.${fileType.extension}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    message.success(`实验结果已下载为 ${fileType.extension.toUpperCase()}`);
+}
+
 function handleDeckSelection(deck, checked) {
     selectedDecks.value = checked
         ? [...new Set([...selectedDecks.value, deck])]
         : selectedDecks.value.filter((item) => item !== deck);
+}
+
+function selectRegressionRetestDecks() {
+    allDecks.value = false;
+    selectedDecks.value = [...regressionRetestDecks.value];
+    deckListExpanded.value = true;
+    message.success(`已选中 ${selectedDecks.value.length} 个胜率异常卡组`);
 }
 
 function clearRecentDecks() {
@@ -1115,6 +1225,18 @@ onBeforeUnmount(() => {
                                         <span>{{ experimentKind === 'challenge' ? '对手卡组' : '测试卡组' }}</span>
                                         <div class="field-heading-actions">
                                             <n-button
+                                                v-if="experimentKind === 'regression'
+                                                    && displayedRun?.kind === 'regression'
+                                                    && terminalStatuses.has(displayedRun.status)"
+                                                text
+                                                type="primary"
+                                                size="tiny"
+                                                :disabled="!!activeRun || regressionRetestDecks.length === 0"
+                                                @click="selectRegressionRetestDecks"
+                                            >
+                                                一键复测
+                                            </n-button>
+                                            <n-button
                                                 text
                                                 type="primary"
                                                 size="tiny"
@@ -1253,15 +1375,21 @@ onBeforeUnmount(() => {
                                     </div>
                                 </div>
                                 <div class="results-actions">
-                                    <n-button size="small" secondary @click="copyResults">复制文本</n-button>
+                                    <n-button-group size="small">
+                                        <n-button secondary @click="copyResults">复制文本</n-button>
+                                        <n-dropdown
+                                            trigger="click"
+                                            :options="resultDownloadOptions"
+                                            @select="downloadResults"
+                                        >
+                                            <n-button secondary aria-label="下载实验结果">▾</n-button>
+                                        </n-dropdown>
+                                    </n-button-group>
                                 </div>
                             </div>
 
                             <div class="metric-grid">
-                                <div
-                                    class="metric primary-metric"
-                                    :class="{ 'has-progress': displayedRun.kind !== 'ranking' }"
-                                >
+                                <div class="metric primary-metric">
                                     <span>{{ displayedRun.kind !== 'ranking' ? '任务进度' : '已完成对局' }}</span>
                                     <strong v-if="displayedRun.kind !== 'ranking'" class="progress-value">
                                         {{ displayedRun.observedGames }}<span> / {{ displayedRun.totalGames }}</span>
@@ -1271,9 +1399,8 @@ onBeforeUnmount(() => {
                                         v-if="displayedRun.kind !== 'ranking'"
                                         type="line"
                                         :percentage="progress"
-                                        indicator-placement="inside"
-                                        :indicator-text-color="darkMode ? '#dfeaed' : '#102a32'"
-                                        :height="18"
+                                        :height="5"
+                                        :show-indicator="false"
                                         :border-radius="0"
                                     />
                                 </div>
