@@ -10,6 +10,8 @@ const {
     SCHEDULE_POLL_MS,
     SCORE_POLL_MS,
     SETTLE_TIMEOUT_MS,
+    WINDBOT_REQUEST_ATTEMPTS,
+    WINDBOT_REQUEST_TIMEOUT_MS,
 } = require('../server/arena-service');
 const { createDefaultArenaSettings } = require('../server/arena-settings');
 
@@ -89,6 +91,8 @@ test('challenge scheduler rotates through opponents in list order and stops at t
 test('scheduling and final result wait use fixed timing', () => {
     assert.equal(SCHEDULE_POLL_MS, 1000);
     assert.equal(SETTLE_TIMEOUT_MS, 10 * 60 * 1000);
+    assert.equal(WINDBOT_REQUEST_ATTEMPTS, 3);
+    assert.equal(WINDBOT_REQUEST_TIMEOUT_MS, 3 * 1000);
 });
 
 test('final result wait queries scores before completing when SRVPro has no rooms', async () => {
@@ -206,7 +210,7 @@ test('pair launches use one duel password per pair and never reuse it', async (c
     assert.ok(requests.every((url) => url.searchParams.get('port') === '7911'));
 });
 
-test('pair launch closes its duel room when a WindBot request fails', async (context) => {
+test('pair launch closes timed-out rooms and retries with a new password', async (context) => {
     const service = new ArenaService({}, {});
     const activeContext = {
         abortController: new AbortController(),
@@ -261,15 +265,29 @@ test('pair launch closes its duel room when a WindBot request fails', async (con
 
     await assert.rejects(
         service.launchMatchup(activeContext, matchup),
-        /old 调用 WindBot 超时（5 秒）/,
+        (error) => error.code === 'WINDBOT_UNAVAILABLE'
+            && /WindBot 连续 3 个约战房间请求失败/.test(error.message),
     );
-    const cleanupUrl = requests.at(-1);
-    assert.equal(cleanupUrl.hostname, 'srvpro.lan');
-    assert.equal(cleanupUrl.port, '7922');
-    assert.equal(cleanupUrl.pathname, '/api/message');
-    assert.equal(cleanupUrl.searchParams.get('username'), 'arena');
-    assert.equal(cleanupUrl.searchParams.get('pass'), 'management-secret');
-    assert.equal(cleanupUrl.searchParams.get('kick'), 'M#123456789');
+    const windBotPasswords = requests
+        .filter((url) => url.hostname === 'current.lan' || url.hostname === 'old.lan')
+        .map((url) => url.searchParams.get('password'));
+    assert.deepEqual(windBotPasswords, [
+        'M#123456789',
+        'M#123456789',
+        'M#123456790',
+        'M#123456790',
+        'M#123456791',
+        'M#123456791',
+    ]);
+    const cleanupUrls = requests.filter((url) => url.pathname === '/api/message');
+    assert.deepEqual(
+        cleanupUrls.map((url) => url.searchParams.get('kick')),
+        ['M#123456789', 'M#123456790', 'M#123456791'],
+    );
+    assert.ok(cleanupUrls.every((url) => url.hostname === 'srvpro.lan'));
+    assert.ok(cleanupUrls.every((url) => url.port === '7922'));
+    assert.ok(cleanupUrls.every((url) => url.searchParams.get('username') === 'arena'));
+    assert.ok(cleanupUrls.every((url) => url.searchParams.get('pass') === 'management-secret'));
 });
 
 test('WindBot 404 distinguishes a missing challenger from other missing decks', async (context) => {
@@ -329,6 +347,29 @@ test('scheduler stops immediately when WindBot reports a missing deck', async ()
 
     await assert.rejects(service.scheduleGames(context), /挑战者卡组不存在/);
     assert.equal(launchCount, 1);
+    assert.deepEqual(events, []);
+});
+
+test('scheduler stops immediately after WindBot is confirmed unavailable', async () => {
+    const events = [];
+    const service = new ArenaService({}, {
+        addEvent(...args) { events.push(args); },
+        setRoomCount() {},
+    });
+    const context = makeSchedulingContext('challenge', ['Unavailable']);
+    context.gamesPerMatchup = 1;
+    context.totalGames = 1;
+    service.getRoomCount = async () => 0;
+    service.launchMatchup = async () => {
+        const error = new Error('新版 WindBot 连续 3 次请求不可用');
+        error.code = 'WINDBOT_UNAVAILABLE';
+        throw error;
+    };
+
+    await assert.rejects(
+        service.scheduleGames(context),
+        (error) => error.code === 'WINDBOT_UNAVAILABLE',
+    );
     assert.deepEqual(events, []);
 });
 
@@ -595,6 +636,70 @@ test('startup events update the active-run revision while WindBot is still start
 
     releaseWindBot();
     await execution;
+});
+
+test('runtime infrastructure loss is interrupted while startup unavailability is failed', async () => {
+    const executeWithError = async (error, duringStartup = false) => {
+        const statuses = [];
+        const service = new ArenaService({}, {
+            addEvent() {},
+            setRunStatus() {},
+        });
+        const context = {
+            abortController: new AbortController(),
+            challengerVersion: 'current',
+            children: [],
+            finished: false,
+            id: `classification-${error.code || 'startup'}`,
+            kind: 'ranking',
+            settings: {
+                srvpro: {},
+                windbots: {
+                    current: { host: 'current.lan', mode: 'remote', port: 2399 },
+                },
+            },
+            srvproId: 'srvpro-1',
+        };
+        service.contexts.set(context.srvproId, context);
+        service.rebootServer = async () => {};
+        service.waitForWindBot = async () => {
+            if (duringStartup) {
+                throw error;
+            }
+        };
+        service.pollScores = async () => {};
+        service.scheduleGames = async () => { throw error; };
+        service.finish = async (activeContext, status, reason, storedError) => {
+            assert.equal(activeContext, context);
+            statuses.push({ reason, status, storedError });
+        };
+
+        await service.execute(context);
+        return statuses[0];
+    };
+
+    const instanceChanged = new Error('SRVPro 实例已变化');
+    instanceChanged.code = 'SRVPRO_INSTANCE_CHANGED';
+    assert.deepEqual(await executeWithError(instanceChanged), {
+        reason: '测试中断: SRVPro 实例已变化',
+        status: 'interrupted',
+        storedError: undefined,
+    });
+
+    const windBotUnavailable = new Error('新版 WindBot 连续 3 次请求不可用');
+    windBotUnavailable.code = 'WINDBOT_UNAVAILABLE';
+    assert.deepEqual(await executeWithError(windBotUnavailable), {
+        reason: '测试中断: 新版 WindBot 连续 3 次请求不可用',
+        status: 'interrupted',
+        storedError: undefined,
+    });
+
+    const startupUnavailable = new Error('新版 WindBot HTTP 服务没有就绪');
+    assert.deepEqual(await executeWithError(startupUnavailable, true), {
+        reason: '测试失败: 新版 WindBot HTTP 服务没有就绪',
+        status: 'failed',
+        storedError: '新版 WindBot HTTP 服务没有就绪',
+    });
 });
 
 test('run creation rejects incomplete settings before persisting a run', () => {
@@ -950,6 +1055,43 @@ test('local WindBot output is decoded from the Windows Chinese code page', (cont
     assert.match(service.getWindBotOutput('current').output, /\[错误\] 拒绝访问。/);
     assert.match(loggedOutput, /\[新版:错误\] 拒绝访问。/);
     assert.doesNotMatch(loggedOutput, /�/);
+});
+
+test('local WindBot exit interrupts running tasks but not tasks still starting', (context) => {
+    const child = Object.assign(new EventEmitter(), {
+        exitCode: null,
+        stderr: new PassThrough(),
+        stdout: new PassThrough(),
+    });
+    const originalSpawn = childProcess.spawn;
+    context.after(() => { childProcess.spawn = originalSpawn; });
+    childProcess.spawn = () => child;
+    const service = new ArenaService({}, {});
+    const makeContext = (id, running) => ({
+        abortController: new AbortController(),
+        challengerVersion: 'current',
+        id,
+        kind: 'ranking',
+        running,
+        settings: { windbots: { current: { mode: 'local' } } },
+    });
+    const runningContext = makeContext('running-task', true);
+    const startingContext = makeContext('starting-task', false);
+    service.contexts.set('srvpro-1', runningContext);
+    service.contexts.set('srvpro-2', startingContext);
+    service.startWindBot('current', '新版', {
+        port: 2399,
+        runtimeDir: 'F:\\WindBot',
+    });
+
+    child.emit('exit', 1, null);
+
+    assert.equal(runningContext.abortController.signal.aborted, true);
+    assert.equal(
+        runningContext.abortController.signal.reason.code,
+        'WINDBOT_UNAVAILABLE',
+    );
+    assert.equal(startingContext.abortController.signal.aborted, false);
 });
 
 test('shared local WindBot stays alive until the last concurrent run finishes', async () => {

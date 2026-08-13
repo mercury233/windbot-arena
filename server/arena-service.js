@@ -23,8 +23,14 @@ const MAX_WINDBOT_OUTPUT_LENGTH = 2000000;
 const SCORE_POLL_MS = 15000;
 const SCHEDULE_POLL_MS = 1000;
 const SETTLE_TIMEOUT_MS = 10 * 60 * 1000;
+const WINDBOT_REQUEST_ATTEMPTS = 3;
+const WINDBOT_REQUEST_TIMEOUT_MS = 3000;
 const USER_STOP_REASON = '用户从 Web 界面停止了测试';
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'stopped', 'failed', 'interrupted']);
+const INTERRUPTION_ERROR_CODES = new Set([
+    'SRVPRO_INSTANCE_CHANGED',
+    'WINDBOT_UNAVAILABLE',
+]);
 
 function requestError(message, statusCode = 400) {
     const error = new Error(message);
@@ -504,6 +510,7 @@ class ArenaService {
                 DUEL_ROOM_MIN,
                 DUEL_ROOM_MAX + 1,
             ),
+            running: false,
             settings: {
                 srvpro: structuredClone(srvpro),
                 windbots: structuredClone(settings.windbots),
@@ -557,6 +564,7 @@ class ArenaService {
             this.database.setRunStatus(context.id, 'running', {
                 startedAt: new Date().toISOString(),
             });
+            context.running = true;
             this.database.addEvent(
                 context.id,
                 'info',
@@ -584,6 +592,10 @@ class ArenaService {
                 return;
             }
             const message = error?.message || String(error);
+            if (INTERRUPTION_ERROR_CODES.has(error?.code)) {
+                await this.finish(context, 'interrupted', `测试中断: ${message}`);
+                return;
+            }
             await this.finish(context, 'failed', `测试失败: ${message}`, message);
         }
     }
@@ -637,6 +649,25 @@ class ArenaService {
                 this.windbotOutputs[name].active = false;
                 this.localWindbots.delete(name);
                 this.appendWindBotOutput(name, `\n[进程已退出] code=${code}, signal=${signal || 'none'}\n`);
+            }
+            if (!child.stopping) {
+                const error = new Error(
+                    `${label} WindBot 进程在任务运行期间退出，code=${code}, signal=${signal || 'none'}`,
+                );
+                error.code = 'WINDBOT_UNAVAILABLE';
+                for (const context of this.contexts.values()) {
+                    const usesInstance = name === 'current'
+                        || context.kind === 'regression'
+                        || (context.kind === 'challenge' && context.challengerVersion === 'old');
+                    if (
+                        context.running
+                        && usesInstance
+                        && context.settings.windbots[name]?.mode === 'local'
+                        && !context.abortController.signal.aborted
+                    ) {
+                        context.abortController.abort(error);
+                    }
+                }
             }
             console.log(`[${label}] WindBot 已退出: code=${code}, signal=${signal}`);
         });
@@ -907,15 +938,23 @@ class ArenaService {
         }
         let response;
         try {
-            response = await fetchWithTimeout(url, 5000, context.abortController.signal);
+            response = await fetchWithTimeout(
+                url,
+                WINDBOT_REQUEST_TIMEOUT_MS,
+                context.abortController.signal,
+            );
         } catch (error) {
             if (context.abortController.signal.aborted) {
                 throw context.abortController.signal.reason;
             }
-            if (error?.name === 'TimeoutError') {
-                throw new Error(`${competitor.rankName} 调用 WindBot 超时（5 秒）`, { cause: error });
-            }
-            throw new Error(`${competitor.rankName} 调用 WindBot 失败: ${error.message}`, { cause: error });
+            const requestError = new Error(
+                error?.name === 'TimeoutError'
+                    ? `${competitor.rankName} 调用 WindBot 超时（${WINDBOT_REQUEST_TIMEOUT_MS / 1000} 秒）`
+                    : `${competitor.rankName} 调用 WindBot 失败: ${error.message}`,
+                { cause: error },
+            );
+            requestError.code = 'WINDBOT_REQUEST_FAILED';
+            throw requestError;
         }
         if (!response.ok) {
             if (response.status === 404) {
@@ -951,24 +990,40 @@ class ArenaService {
     async launchPair(context, players) {
         const roomsPerSecond = context.settings.srvpro.roomsPerSecond ?? 1;
         const joinDelayMs = SCHEDULE_POLL_MS / (roomsPerSecond * 2);
-        const password = this.nextDuelPassword(context);
-        try {
-            await this.addBot(context, players[0], password);
-            await sleep(joinDelayMs, context.abortController.signal);
-            await this.addBot(context, players[1], password);
-            await sleep(joinDelayMs, context.abortController.signal);
-        } catch (error) {
+        for (let attempt = 1; attempt <= WINDBOT_REQUEST_ATTEMPTS; attempt++) {
+            const password = this.nextDuelPassword(context);
             try {
-                await this.closeDuelRoom(context, password);
-            } catch (cleanupError) {
-                if (!isAbortError(error)) {
-                    throw new Error(
-                        `${error.message}；关闭约战房间失败: ${cleanupError.message}`,
-                        { cause: error },
-                    );
+                await this.addBot(context, players[0], password);
+                await sleep(joinDelayMs, context.abortController.signal);
+                await this.addBot(context, players[1], password);
+                await sleep(joinDelayMs, context.abortController.signal);
+                return;
+            } catch (error) {
+                let launchError = error;
+                try {
+                    await this.closeDuelRoom(context, password);
+                } catch (cleanupError) {
+                    if (!isAbortError(error)) {
+                        launchError = new Error(
+                            `${error.message}；关闭约战房间失败: ${cleanupError.message}`,
+                            { cause: error },
+                        );
+                        launchError.code = cleanupError.code || error.code;
+                    }
                 }
+                if (launchError.code !== 'WINDBOT_REQUEST_FAILED') {
+                    throw launchError;
+                }
+                if (attempt === WINDBOT_REQUEST_ATTEMPTS) {
+                    const unavailableError = new Error(
+                        `WindBot 连续 ${WINDBOT_REQUEST_ATTEMPTS} 个约战房间请求失败: ${launchError.message}`,
+                        { cause: launchError },
+                    );
+                    unavailableError.code = 'WINDBOT_UNAVAILABLE';
+                    throw unavailableError;
+                }
+                await sleep(250, context.abortController.signal);
             }
-            throw error;
         }
     }
 
@@ -1049,7 +1104,10 @@ class ArenaService {
                 if (context.abortController.signal.aborted) {
                     throw context.abortController.signal.reason;
                 }
-                if (error?.code === 'WINDBOT_DECK_NOT_FOUND') {
+                if (
+                    error?.code === 'WINDBOT_DECK_NOT_FOUND'
+                    || error?.code === 'WINDBOT_UNAVAILABLE'
+                ) {
                     throw error;
                 }
                 consecutiveErrors++;
@@ -1172,6 +1230,7 @@ class ArenaService {
             return;
         }
         context.finished = true;
+        context.running = false;
         if (!context.abortController.signal.aborted) {
             context.abortController.abort(new DOMException('任务已结束', 'AbortError'));
         }
@@ -1240,5 +1299,7 @@ module.exports = {
     SCHEDULE_POLL_MS,
     SCORE_POLL_MS,
     SETTLE_TIMEOUT_MS,
+    WINDBOT_REQUEST_ATTEMPTS,
+    WINDBOT_REQUEST_TIMEOUT_MS,
     requestError,
 };
