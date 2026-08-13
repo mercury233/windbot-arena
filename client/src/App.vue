@@ -83,11 +83,14 @@ const inspectorKind = ref('srvpro');
 const inspectorLoading = ref(false);
 const inspectorError = ref('');
 const inspectorRooms = ref([]);
+const inspectorHalfwayWatchEnabled = ref(null);
+const updatingHalfwayWatch = ref(false);
 const inspectorOutput = ref(null);
 const clockNow = ref(Date.now());
 let eventSource;
 let clockTimer;
 let inspectorTimer;
+let inspectorRequest = 0;
 let refreshing;
 let revisionIndexes;
 let runSelectionRequest = 0;
@@ -581,6 +584,10 @@ async function openSettings() {
 
 async function loadInspector(silent = false) {
     const kind = inspectorKind.value;
+    if (kind === 'srvpro' && updatingHalfwayWatch.value) {
+        return;
+    }
+    const request = ++inspectorRequest;
     if (!silent) {
         inspectorLoading.value = true;
     }
@@ -588,12 +595,13 @@ async function loadInspector(silent = false) {
         const body = kind === 'srvpro'
             ? await api(`/api/srvpro/rooms?srvproId=${encodeURIComponent(selectedSrvproId.value)}`)
             : await api(`/api/windbots/${kind}/output`);
-        if (kind !== inspectorKind.value || !inspectorOpen.value) {
+        if (request !== inspectorRequest || kind !== inspectorKind.value || !inspectorOpen.value) {
             return;
         }
         inspectorError.value = '';
         if (kind === 'srvpro') {
             inspectorRooms.value = body.rooms;
+            inspectorHalfwayWatchEnabled.value = body.enableHalfwayWatch;
         } else {
             inspectorOutput.value = body;
         }
@@ -612,6 +620,7 @@ function openInspector(kind) {
     clearInterval(inspectorTimer);
     inspectorKind.value = kind;
     inspectorRooms.value = [];
+    inspectorHalfwayWatchEnabled.value = null;
     inspectorOutput.value = null;
     inspectorError.value = '';
     inspectorOpen.value = true;
@@ -621,7 +630,44 @@ function openInspector(kind) {
 
 function closeInspector() {
     inspectorOpen.value = false;
+    inspectorRequest++;
     clearInterval(inspectorTimer);
+}
+
+async function updateHalfwayWatch(enabled) {
+    updatingHalfwayWatch.value = true;
+    const request = ++inspectorRequest;
+    const srvproId = selectedSrvproId.value;
+    try {
+        const result = await api('/api/srvpro/halfwaywatch', {
+            body: JSON.stringify({
+                enabled,
+                srvproId,
+            }),
+            method: 'PUT',
+        });
+        if (
+            request !== inspectorRequest
+            || !inspectorOpen.value
+            || inspectorKind.value !== 'srvpro'
+            || selectedSrvproId.value !== srvproId
+        ) {
+            return;
+        }
+        inspectorHalfwayWatchEnabled.value = result.enableHalfwayWatch;
+        message.success(result.enableHalfwayWatch ? '已启用新建房间的中途观战' : '已禁用新建房间的中途观战');
+    } catch (error) {
+        if (
+            request === inspectorRequest
+            && inspectorOpen.value
+            && inspectorKind.value === 'srvpro'
+            && selectedSrvproId.value === srvproId
+        ) {
+            message.error(error.message);
+        }
+    } finally {
+        updatingHalfwayWatch.value = false;
+    }
 }
 
 function formatRoomPlayer(player) {
@@ -1753,7 +1799,19 @@ onBeforeUnmount(() => {
                 aria-modal="true"
             >
                 <template #header-extra>
-                    <n-button size="small" quaternary @click="closeInspector">关闭</n-button>
+                    <div class="inspector-header-actions">
+                        <label v-if="inspectorKind === 'srvpro'" class="halfwaywatch-control">
+                            <span>允许中途观战</span>
+                            <n-switch
+                                :value="inspectorHalfwayWatchEnabled === true"
+                                :disabled="inspectorHalfwayWatchEnabled === null"
+                                :loading="updatingHalfwayWatch"
+                                size="small"
+                                @update:value="updateHalfwayWatch"
+                            />
+                        </label>
+                        <n-button size="small" secondary @click="closeInspector">关闭</n-button>
+                    </div>
                 </template>
                 <n-alert v-if="inspectorError" type="error" :bordered="false">
                     {{ inspectorError }}
@@ -1776,6 +1834,7 @@ onBeforeUnmount(() => {
                                         <td>{{ room.id }}</td>
                                         <td>
                                             <button
+                                                v-if="inspectorHalfwayWatchEnabled"
                                                 type="button"
                                                 class="room-name-button"
                                                 title="点击复制房名"
@@ -1783,6 +1842,7 @@ onBeforeUnmount(() => {
                                             >
                                                 {{ room.name }}
                                             </button>
+                                            <span v-else class="room-name-text">{{ room.name }}</span>
                                         </td>
                                         <td>{{ formatRoomPlayer(room.players[0]) }}</td>
                                         <td>{{ formatRoomPlayer(room.players[1]) }}</td>

@@ -229,13 +229,15 @@ class ArenaService {
     async listRooms(srvproId) {
         const { settings } = this.database.getArenaSettings();
         const srvpro = this.getSrvpro(settings, srvproId || settings.srvpros[0].id);
+        let enableHalfwayWatch;
         let rooms;
         try {
-            ({ rooms } = await this.fetchRooms(srvpro));
+            ({ enableHalfwayWatch, rooms } = await this.fetchRooms(srvpro));
         } catch (error) {
             throw requestError(`无法查询 SRVPro 房间: ${error.message}`, 502);
         }
         return {
+            enableHalfwayWatch,
             fetchedAt: new Date().toISOString(),
             srvpro: {
                 id: srvpro.id,
@@ -260,6 +262,24 @@ class ArenaService {
                     : [],
                 status: String(room.istart ?? ''),
             })),
+        };
+    }
+
+    async updateHalfwayWatch(srvproId, enabled) {
+        if (typeof enabled !== 'boolean') {
+            throw requestError('是否允许中途观战必须是布尔值');
+        }
+        const record = this.database.getArenaSettings();
+        const srvpro = this.getSrvpro(record.settings, srvproId || record.settings.srvpros[0].id);
+        try {
+            await this.setSrvproHalfwayWatch(srvpro, enabled);
+        } catch (error) {
+            throw requestError(`无法设置 SRVPro 中途观战选项: ${error.message}`, 502);
+        }
+
+        return {
+            enableHalfwayWatch: enabled,
+            srvpro: { id: srvpro.id, name: srvpro.name },
         };
     }
 
@@ -721,10 +741,30 @@ class ArenaService {
         if (body.rooms.some((room) => room?.roomid === '0' && room?.roomname === '密码错误')) {
             throw new Error('SRVPro 管理账号或密码错误');
         }
+        if (typeof body.enableHalfwayWatch !== 'boolean') {
+            throw new Error('房间 API 响应中没有有效的 enableHalfwayWatch');
+        }
         return {
+            enableHalfwayWatch: body.enableHalfwayWatch,
             rooms: body.rooms,
             serverInstanceId: getServerInstanceId(response, body),
         };
+    }
+
+    async setSrvproHalfwayWatch(srvpro, enabled, signal) {
+        const url = makeHttpUrl(srvpro.host, srvpro.statusPort, '/api/halfwaywatch');
+        url.searchParams.set('username', srvpro.username);
+        url.searchParams.set('pass', srvpro.password);
+        url.searchParams.set('enabled', String(enabled));
+        const response = await fetchSrvproApi(url, 'SRVPro 中途观战设置 API ', 5000, signal);
+        if (!response.ok) {
+            throw new Error(`中途观战设置 API 返回 HTTP ${response.status}`);
+        }
+        const body = await response.json();
+        if (body?.enableHalfwayWatch !== enabled) {
+            throw new Error('中途观战设置 API 未返回预期状态');
+        }
+        return getServerInstanceId(response, body);
     }
 
     async fetchRoomCount(srvpro, signal) {

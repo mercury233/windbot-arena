@@ -334,6 +334,22 @@ input {
     min-height: 230px;
 }
 
+.inspector-header-actions,
+.halfwaywatch-control {
+    display: flex;
+    align-items: center;
+}
+
+.inspector-header-actions {
+    gap: 16px;
+}
+
+.halfwaywatch-control {
+    gap: 8px;
+    color: #8ba0a7;
+    font-size: 12px;
+}
+
 .room-table-wrap {
     max-height: min(60vh, 560px);
     overflow: auto;
@@ -383,6 +399,10 @@ input {
     cursor: copy;
     font: inherit;
     text-align: left;
+}
+
+.room-name-text {
+    padding: 2px 4px;
 }
 
 .room-name-button:hover,

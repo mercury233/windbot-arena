@@ -29,6 +29,7 @@ test('settings, room, WindBot and run APIs return service data', async (context)
     let refreshedDecks = false;
     let requestedRunPage;
     let deletedRunId;
+    let halfwayWatchUpdate;
     const publicRecord = {
         secretStatus: { srvpros: { 'srvpro-1': { passwordConfigured: true } } },
         settings: { srvpros: [{ id: 'srvpro-1', password: '' }] },
@@ -38,6 +39,10 @@ test('settings, room, WindBot and run APIs return service data', async (context)
         getSettings: () => publicRecord,
         getWindBotOutput: (name) => ({ available: true, name, output: 'ready' }),
         listRooms: (srvproId) => ({ rooms: [{ id: '123', name: srvproId }] }),
+        updateHalfwayWatch: (srvproId, enabled) => {
+            halfwayWatchUpdate = { enabled, srvproId };
+            return { enableHalfwayWatch: enabled };
+        },
         refreshBotConfigs: () => {
             refreshedDecks = true;
             return { configuration: {}, fetchedRemoteCount: 1 };
@@ -72,6 +77,12 @@ test('settings, room, WindBot and run APIs return service data', async (context)
     assert.deepEqual(await (await fetch(`${baseUrl}/api/srvpro/rooms?srvproId=srvpro-2`)).json(), {
         rooms: [{ id: '123', name: 'srvpro-2' }],
     });
+    assert.deepEqual(await (await fetch(`${baseUrl}/api/srvpro/halfwaywatch`, {
+        body: JSON.stringify({ enabled: false, srvproId: 'srvpro-2' }),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'PUT',
+    })).json(), { enableHalfwayWatch: false });
+    assert.deepEqual(halfwayWatchUpdate, { enabled: false, srvproId: 'srvpro-2' });
     assert.deepEqual(await (await fetch(`${baseUrl}/api/windbots/current/output`)).json(), {
         available: true,
         name: 'current',

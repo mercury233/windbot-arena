@@ -973,6 +973,7 @@ test('room inspection authenticates server-side and exposes only display fields'
         assert.equal(url.searchParams.get('username'), 'arena');
         assert.equal(url.searchParams.get('pass'), 'management-secret');
         return Response.json({
+            enableHalfwayWatch: false,
             serverInstanceId: 'room-inspection-instance',
             rooms: [{
                 istart: 'Duel:2 Turn:10',
@@ -988,6 +989,7 @@ test('room inspection authenticates server-side and exposes only display fields'
     };
 
     const result = await service.listRooms();
+    assert.equal(result.enableHalfwayWatch, false);
     assert.deepEqual(result.rooms, [{
         id: '2937844',
         name: 'M,RANDOM#85468',
@@ -999,6 +1001,78 @@ test('room inspection authenticates server-side and exposes only display fields'
     }]);
     assert.equal(JSON.stringify(result).includes('management-secret'), false);
     assert.equal(JSON.stringify(result).includes('192.0.2.1'), false);
+});
+
+test('room inspection recognizes the legacy password-error room before new fields', async (context) => {
+    const settings = createDefaultArenaSettings();
+    Object.assign(settings.srvpros[0], {
+        host: 'srvpro.lan',
+        password: 'wrong-secret',
+        username: 'arena',
+    });
+    const service = new ArenaService({}, {
+        getArenaSettings: () => ({ settings }),
+    });
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async () => Response.json({
+        rooms: [{ roomid: '0', roomname: '密码错误', needpass: 'true' }],
+    });
+
+    await assert.rejects(
+        service.listRooms(),
+        /SRVPro 管理账号或密码错误/,
+    );
+});
+
+test('halfway watch updates SRVPro without storing a second Arena setting', async () => {
+    const settings = createDefaultArenaSettings();
+    Object.assign(settings.srvpros[0], {
+        host: 'srvpro.lan',
+        password: 'management-secret',
+        username: 'arena',
+    });
+    const service = new ArenaService({}, {
+        getArenaSettings: () => ({ settings }),
+        saveArenaSettings() {
+            assert.fail('实时中途观战状态不应写入 Arena 设置');
+        },
+    });
+    const calls = [];
+    service.setSrvproHalfwayWatch = async (srvpro, enabled) => {
+        calls.push({ enabled, id: srvpro.id });
+        return 'server-instance';
+    };
+
+    const result = await service.updateHalfwayWatch('srvpro-1', false);
+
+    assert.deepEqual(calls, [{ enabled: false, id: 'srvpro-1' }]);
+    assert.equal(result.enableHalfwayWatch, false);
+});
+
+test('halfway watch request uses the authenticated SRVPro API', async (context) => {
+    const service = new ArenaService({}, {});
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async (url) => {
+        assert.equal(url.pathname, '/api/halfwaywatch');
+        assert.equal(url.searchParams.get('username'), 'arena');
+        assert.equal(url.searchParams.get('pass'), 'management-secret');
+        assert.equal(url.searchParams.get('enabled'), 'true');
+        return Response.json({
+            enableHalfwayWatch: true,
+            serverInstanceId: 'halfwaywatch-setting-instance',
+        });
+    };
+
+    const serverInstanceId = await service.setSrvproHalfwayWatch({
+        host: 'srvpro.lan',
+        password: 'management-secret',
+        statusPort: 7922,
+        username: 'arena',
+    }, true);
+
+    assert.equal(serverInstanceId, 'halfwaywatch-setting-instance');
 });
 
 test('WindBot output inspection distinguishes local and remote instances', () => {

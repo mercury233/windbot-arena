@@ -27,6 +27,17 @@ function createApp(config, database, arenaService, shutdownSignal) {
         }
     });
 
+    app.put('/api/srvpro/halfwaywatch', async (request, response, next) => {
+        try {
+            response.json(await arenaService.updateHalfwayWatch(
+                request.body.srvproId,
+                request.body.enabled,
+            ));
+        } catch (error) {
+            next(error);
+        }
+    });
+
     app.get('/api/windbots/:name/output', (request, response, next) => {
         try {
             response.json(arenaService.getWindBotOutput(request.params.name));
