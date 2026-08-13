@@ -124,11 +124,13 @@ const runKindLabels = {
     challenge: '卡组挑战',
     ranking: '胜率排行',
     regression: '新旧回归',
+    tag: '双打冒烟',
 };
 const runKindDescriptions = {
     challenge: '指定卡组按列表顺序轮流对战全部或选中的对手，每组达到计划局数后自动完成。',
     ranking: '从选中卡组中每局随机抽取两个对战，直到手动停止。',
     regression: '新版与旧版使用同一卡组，按计划局数进行回归对战。',
+    tag: '从选中卡组中每局随机组队进行双打，直到手动停止；不统计胜率。',
 };
 
 const regressionDeckOptions = computed(() => (system.value?.configuration.decks || []).map((item) => ({
@@ -280,6 +282,9 @@ const canStart = computed(() => {
     if (experimentKind.value === 'ranking') {
         return selectedCount >= 2;
     }
+    if (experimentKind.value === 'tag') {
+        return selectedCount >= 1;
+    }
     return selectedCount > 0 && Number.isInteger(gamesPerMatchup.value);
 });
 const progress = computed(() => {
@@ -344,6 +349,19 @@ const rankingRows = computed(() => {
         || left.label.localeCompare(right.label)
     ));
 });
+const tagRows = computed(() => {
+    if (displayedRun.value?.kind !== 'tag') {
+        return [];
+    }
+    return [...displayedRun.value.matchups].sort((left, right) => (
+        right.launchedGames - left.launchedGames || left.label.localeCompare(right.label)
+    ));
+});
+const tagWindBotOutputScannable = computed(() => (
+    displayedRun.value?.kind === 'tag'
+    && displayedRun.value.config?.windbots?.current?.mode === 'local'
+));
+const tagIssueCount = computed(() => Number(displayedRun.value?.windbotOutputErrorCount) || 0);
 const regressionRetestDecks = computed(() => {
     const availableDecks = new Set(regressionDeckOptions.value.map((option) => option.value));
     return regressionRows.value
@@ -365,7 +383,7 @@ const elapsedMilliseconds = computed(() => {
 });
 const estimatedCompletionAt = computed(() => {
     const run = displayedRun.value;
-    if (!run || run.kind === 'ranking') {
+    if (!run || run.kind === 'ranking' || run.kind === 'tag') {
         return null;
     }
     if (terminalStatuses.has(run.status)) {
@@ -670,18 +688,22 @@ async function updateHalfwayWatch(enabled) {
     }
 }
 
-function formatRoomPlayer(player) {
+function formatRoomPlayer(player, includeScore = true) {
     if (!player) {
         return '—';
     }
     const details = [];
-    if (player.status?.score !== null && player.status?.score !== undefined) {
+    if (includeScore && player.status?.score !== null && player.status?.score !== undefined) {
         details.push(`Score: ${player.status.score}`);
     }
     if (player.status?.lp !== null && player.status?.lp !== undefined) {
         details.push(`LP: ${player.status.lp}`);
     }
     return details.length > 0 ? `${player.name} (${details.join(' ')})` : player.name;
+}
+
+function getRoomPlayer(room, position) {
+    return room.players.find((player) => player.position === position);
 }
 
 async function saveSettings(settings) {
@@ -841,6 +863,9 @@ function formatHistoryTitle(run) {
         const version = run.config?.challengerVersion === 'old' ? '旧版' : '新版';
         return `${label} · ${version} ${run.config?.targetDeck || '—'} VS ${matchupCount} 个卡组`;
     }
+    if (run.kind === 'tag') {
+        return `${label} · ${matchupCount} 个测试卡组`;
+    }
     const deckName = run.deckName || run.matchups?.[0]?.label;
     if (run.kind === 'regression' && matchupCount === 1 && deckName) {
         return `${label} · ${deckName} · 1 个卡组`;
@@ -900,7 +925,13 @@ function serializeResults(run, format) {
             },
             summary: {
                 elapsedMilliseconds: elapsedMilliseconds.value,
-                currentWinRate: run.kind === 'ranking' ? null : currentWinRate.value,
+                currentWinRate: ['ranking', 'tag'].includes(run.kind) ? null : currentWinRate.value,
+                windbotOutputErrorCount: run.kind === 'tag'
+                    ? run.windbotOutputErrorCount || 0
+                    : null,
+                windbotOutputScannable: run.kind === 'tag'
+                    ? run.config?.windbots?.current?.mode === 'local'
+                    : null,
                 rankingLeader: run.kind === 'ranking' && rankingLeader.value ? {
                     deck: rankingLeader.value.label,
                     winRate: rankingLeader.value.currentWinRate,
@@ -914,13 +945,21 @@ function serializeResults(run, format) {
         ['任务 ID', run.id],
         ['状态', statusLabels[run.status] || run.status],
         ['创建时间', formatDate(run.createdAt)],
-        ['已完成对局', run.observedGames],
-        ['已创建对局', `${run.launchedGames}${run.kind !== 'ranking' ? ` / ${run.totalGames}` : ''}`],
+        ['已完成对局', run.kind === 'tag' ? '不统计' : run.observedGames],
+        ['已创建对局', `${run.launchedGames}${
+            !['ranking', 'tag'].includes(run.kind) ? ` / ${run.totalGames}` : ''
+        }`],
     ];
     if (run.kind === 'ranking') {
         summary.push(['当前榜首', rankingLeader.value
             ? `${rankingLeader.value.label}（${formatPercent(rankingLeader.value.currentWinRate)}）`
             : '统计中']);
+    } else if (run.kind === 'tag') {
+        summary.push(['测试卡组', run.matchups.length]);
+        summary.push([
+            'WindBot 错误次数',
+            tagWindBotOutputScannable.value ? tagIssueCount.value : '无法读取远程输出',
+        ]);
     } else {
         if (run.kind === 'challenge') {
             summary.push(['挑战者卡组', run.config?.targetDeck || '—']);
@@ -963,6 +1002,13 @@ function serializeResults(run, format) {
                 formatPercent(matchup.currentWinRate),
             ];
         });
+    } else if (run.kind === 'tag') {
+        columns = ['测试卡组', '等级 / Bot', '参与对局'];
+        rows = tagRows.value.map((entry) => [
+            entry.label,
+            `${entry.aiLevel ? `LV${entry.aiLevel} / ` : ''}${entry.competitors[0]?.botLabel || '—'}`,
+            entry.launchedGames,
+        ]);
     } else {
         columns = ['排名', '卡组', '等级 / Bot', '已统计 / 已创建', '胜 / 负 / 逃', '胜率'];
         rows = rankingRows.value.map((entry, index) => {
@@ -1164,7 +1210,7 @@ onBeforeUnmount(() => {
                 <div class="hero-copy">
                     <span class="eyebrow">DUEL EXPERIMENT LAB</span>
                     <h1>让每一次 AI 变更<br><em>都有数据可循</em></h1>
-                    <p>运行新旧版本回归、单卡组挑战与随机胜率排行，实时观察卡组表现并完整留档。</p>
+                    <p>运行新旧版本回归、单卡组挑战、双打冒烟与随机胜率排行，实时观察卡组表现并完整留档。</p>
                 </div>
                 <div class="system-readout">
                     <div>
@@ -1220,6 +1266,7 @@ onBeforeUnmount(() => {
                             >
                                 <n-radio-button value="regression">新旧回归</n-radio-button>
                                 <n-radio-button value="challenge">卡组挑战</n-radio-button>
+                                <n-radio-button value="tag">双打冒烟</n-radio-button>
                                 <n-radio-button value="ranking">胜率排行</n-radio-button>
                             </n-radio-group>
                             <n-alert
@@ -1397,7 +1444,10 @@ onBeforeUnmount(() => {
                                     </span>
                                 </div>
                                 <div class="launch-actions">
-                                    <label v-if="experimentKind !== 'ranking'" class="field games-field">
+                                    <label
+                                        v-if="!['ranking', 'tag'].includes(experimentKind)"
+                                        class="field games-field"
+                                    >
                                         <span>{{ experimentKind === 'challenge' ? '每个对手局数' : '每卡组局数' }}</span>
                                         <n-input-number
                                             v-model:value="configuredGamesPerMatchup"
@@ -1423,7 +1473,7 @@ onBeforeUnmount(() => {
                                         <template #trigger>
                                             <n-button type="error" ghost :loading="stopping">停止测试</n-button>
                                         </template>
-                                        已创建的对局不会撤销，现有统计会保留。确认停止？
+                                        已创建的对局不会撤销，现有记录会保留。确认停止？
                                     </n-popconfirm>
                                 </div>
                             </div>
@@ -1464,13 +1514,15 @@ onBeforeUnmount(() => {
 
                             <div class="metric-grid">
                                 <div class="metric primary-metric">
-                                    <span>{{ displayedRun.kind !== 'ranking' ? '任务进度' : '已完成对局' }}</span>
-                                    <strong v-if="displayedRun.kind !== 'ranking'" class="progress-value">
+                                    <span v-if="displayedRun.kind === 'tag'">测试卡组</span>
+                                    <span v-else>{{ displayedRun.kind !== 'ranking' ? '任务进度' : '已完成对局' }}</span>
+                                    <strong v-if="displayedRun.kind === 'tag'">{{ displayedRun.matchups.length }}</strong>
+                                    <strong v-else-if="displayedRun.kind !== 'ranking'" class="progress-value">
                                         {{ displayedRun.observedGames }}<span> / {{ displayedRun.totalGames }}</span>
                                     </strong>
                                     <strong v-else>{{ displayedRun.observedGames }}</strong>
                                     <n-progress
-                                        v-if="displayedRun.kind !== 'ranking'"
+                                        v-if="!['ranking', 'tag'].includes(displayedRun.kind)"
                                         type="line"
                                         :percentage="progress"
                                         :height="5"
@@ -1484,12 +1536,24 @@ onBeforeUnmount(() => {
                                 </div>
                                 <div class="metric">
                                     <span v-if="displayedRun.kind === 'ranking'">当前榜首</span>
+                                    <span
+                                        v-else-if="displayedRun.kind === 'tag'"
+                                        title="扫描本次任务运行期间新版 WindBot 写入 stderr 的错误记录"
+                                    >
+                                        WindBot 错误次数
+                                    </span>
                                     <span v-else>{{ displayedRun.kind === 'challenge' ? '挑战卡组总胜率' : '新版总胜率' }}</span>
                                     <strong v-if="displayedRun.kind === 'ranking'" class="leader-value">
                                         <span :title="rankingLeader?.label || ''">
                                             {{ rankingLeader?.label || '统计中' }}
                                         </span>
                                         <small v-if="rankingLeader">{{ formatPercent(rankingLeader.currentWinRate) }}</small>
+                                    </strong>
+                                    <strong
+                                        v-else-if="displayedRun.kind === 'tag'"
+                                        :class="{ 'unavailable-value': !tagWindBotOutputScannable }"
+                                    >
+                                        {{ tagWindBotOutputScannable ? tagIssueCount : '无法读取远程输出' }}
                                     </strong>
                                     <strong v-else-if="displayedRun.kind === 'challenge'" class="challenge-rate-value">
                                         <span :title="displayedRun.config?.targetDeck || ''">
@@ -1513,12 +1577,12 @@ onBeforeUnmount(() => {
                                     <span>
                                         {{ terminalStatuses.has(displayedRun.status)
                                             ? '完成时间'
-                                            : displayedRun.kind !== 'ranking' ? '预计完成时间' : '运行方式' }}
+                                            : !['ranking', 'tag'].includes(displayedRun.kind) ? '预计完成时间' : '运行方式' }}
                                     </span>
                                     <strong class="time-value">
                                         {{ terminalStatuses.has(displayedRun.status)
                                             ? formatDate(displayedRun.finishedAt)
-                                            : displayedRun.kind !== 'ranking'
+                                            : !['ranking', 'tag'].includes(displayedRun.kind)
                                                 ? estimatedCompletionAt ? formatDate(estimatedCompletionAt) : '估算中'
                                                 : '手动停止' }}
                                     </strong>
@@ -1614,6 +1678,28 @@ onBeforeUnmount(() => {
                                             <td class="deck-win-rate">
                                                 {{ formatPercent(matchup.currentWinRate) }}
                                             </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div v-else-if="displayedRun.kind === 'tag'" class="table-wrap">
+                                <table class="result-table">
+                                    <thead>
+                                        <tr>
+                                            <th>测试卡组</th>
+                                            <th>参与对局</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="entry in tagRows" :key="entry.id">
+                                            <td class="deck-cell">
+                                                <strong>{{ entry.label }}</strong>
+                                                <small>
+                                                    <span v-if="entry.aiLevel">LV{{ entry.aiLevel }} · </span>
+                                                    {{ entry.competitors[0]?.botLabel }}
+                                                </small>
+                                            </td>
+                                            <td><span class="progress-number">{{ entry.launchedGames }}</span></td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -1824,8 +1910,8 @@ onBeforeUnmount(() => {
                                     <tr>
                                         <th>序号</th>
                                         <th>房名</th>
-                                        <th>玩家</th>
-                                        <th>玩家</th>
+                                        <th>玩家（队伍 A）</th>
+                                        <th>玩家（队伍 B）</th>
                                         <th>状态</th>
                                     </tr>
                                 </thead>
@@ -1844,8 +1930,20 @@ onBeforeUnmount(() => {
                                             </button>
                                             <span v-else class="room-name-text">{{ room.name }}</span>
                                         </td>
-                                        <td>{{ formatRoomPlayer(room.players[0]) }}</td>
-                                        <td>{{ formatRoomPlayer(room.players[1]) }}</td>
+                                        <td>
+                                            <div v-if="room.mode === 2" class="room-team-members">
+                                                <span>{{ formatRoomPlayer(getRoomPlayer(room, 0), false) }}</span>
+                                                <span>{{ getRoomPlayer(room, 1)?.name || '—' }}</span>
+                                            </div>
+                                            <span v-else>{{ formatRoomPlayer(getRoomPlayer(room, 0)) }}</span>
+                                        </td>
+                                        <td>
+                                            <div v-if="room.mode === 2" class="room-team-members">
+                                                <span>{{ formatRoomPlayer(getRoomPlayer(room, 2), false) }}</span>
+                                                <span>{{ getRoomPlayer(room, 3)?.name || '—' }}</span>
+                                            </div>
+                                            <span v-else>{{ formatRoomPlayer(getRoomPlayer(room, 1)) }}</span>
+                                        </td>
                                         <td>{{ room.status || '—' }}</td>
                                     </tr>
                                 </tbody>

@@ -11,12 +11,13 @@ const {
     buildChallengeMatchups,
     buildRankingEntries,
     buildRegressionMatchups,
+    buildTagEntries,
     inspectConfiguration,
     loadBotConfigText,
 } = require('./bot-config');
 const { normalizeRank } = require('./stats');
 
-// M#… 会创建可统计的普通 Match 房间，长度应小于 YGOPro / WindBot 的 20 字符房名字段。
+// M#… 与 T#… 分别创建 Match 和 Tag 房间，长度应小于 YGOPro / WindBot 的 20 字符房名字段。
 const DUEL_ROOM_MIN = 100000000;
 const DUEL_ROOM_MAX = 999999999;
 const MAX_WINDBOT_OUTPUT_LENGTH = 2000000;
@@ -146,6 +147,11 @@ function sanitizeEnvironment() {
     return result;
 }
 
+function getRoomLaunchRate(context) {
+    const configuredRate = context.settings.srvpro.roomsPerSecond ?? 1;
+    return context.kind === 'tag' ? configuredRate / 2 : configuredRate;
+}
+
 class ArenaService {
     constructor(runtimeConfig, database) {
         this.runtimeConfig = runtimeConfig;
@@ -161,6 +167,7 @@ class ArenaService {
             current: { active: false, output: '', updatedAt: null },
             old: { active: false, output: '', updatedAt: null },
         };
+        this.windbotErrorLineBuffers = { current: '', old: '' };
     }
 
     initialize() {
@@ -245,13 +252,16 @@ class ArenaService {
             },
             rooms: rooms.map((room) => ({
                 id: String(room.roomid ?? ''),
+                mode: Number.isInteger(Number(room.roommode)) ? Number(room.roommode) : null,
                 name: String(room.roomname ?? ''),
                 players: Array.isArray(room.users)
                     ? room.users
                         .filter((user) => user && user.pos !== 7)
-                        .slice(0, 2)
+                        .sort((left, right) => left.pos - right.pos)
+                        .slice(0, 4)
                         .map((user) => ({
                             name: String(user.name ?? ''),
+                            position: Number(user.pos),
                             status: user.status && typeof user.status === 'object'
                                 ? {
                                     lp: user.status.lp ?? null,
@@ -309,6 +319,40 @@ class ArenaService {
         const entry = this.windbotOutputs[name];
         entry.output = `${entry.output}${output}`.slice(-MAX_WINDBOT_OUTPUT_LENGTH);
         entry.updatedAt = new Date().toISOString();
+    }
+
+    scanWindBotErrors(name, output, flush = false) {
+        const lines = `${this.windbotErrorLineBuffers[name]}${output}`.split(/\r?\n/);
+        this.windbotErrorLineBuffers[name] = flush ? '' : lines.pop();
+        let recorded = false;
+        for (const rawLine of lines) {
+            const match = rawLine.match(/^\[\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s+(.+)$/);
+            if (!match) {
+                continue;
+            }
+            // 本地 WindBot 由并发任务共享，stderr 无法可靠关联到具体 SRVPro 任务；
+            // 少量误归属只影响冒烟提示，不值得为此限制任务并发或改造 WindBot 协议。
+            for (const context of this.contexts.values()) {
+                if (
+                    context.kind !== 'tag'
+                    || !context.running
+                    || name !== 'current'
+                    || context.settings.windbots.current.mode !== 'local'
+                ) {
+                    continue;
+                }
+                this.database.addEvent(
+                    context.id,
+                    'error',
+                    'windbot-output-error',
+                    `WindBot 输出错误: ${match[1]}`,
+                );
+                recorded = true;
+            }
+        }
+        if (recorded) {
+            this.markChanged('run-event');
+        }
     }
 
     async updateSettings(input) {
@@ -419,7 +463,7 @@ class ArenaService {
             throw requestError('测试配置必须是对象');
         }
         const kind = input.kind || 'regression';
-        if (!['challenge', 'ranking', 'regression'].includes(kind)) {
+        if (!['challenge', 'ranking', 'regression', 'tag'].includes(kind)) {
             throw requestError('不支持的测试类型');
         }
         if (input.decks !== undefined && !Array.isArray(input.decks)) {
@@ -479,6 +523,8 @@ class ArenaService {
                 normalizedTargetDeck = matchups[0].competitors[0].deck;
             } else if (kind === 'ranking') {
                 matchups = buildRankingEntries(settings, input.decks);
+            } else if (kind === 'tag') {
+                matchups = buildTagEntries(settings, input.decks);
             } else {
                 matchups = buildRegressionMatchups(settings, input.decks);
             }
@@ -537,7 +583,9 @@ class ArenaService {
             },
             srvproId,
             stopReason: null,
-            totalGames: kind === 'ranking' ? 0 : matchups.length * gamesPerMatchup,
+            totalGames: kind === 'ranking' || kind === 'tag'
+                ? 0
+                : matchups.length * gamesPerMatchup,
         };
         this.contexts.set(srvproId, context);
         this.markChanged('created');
@@ -592,10 +640,12 @@ class ArenaService {
                 `${instances.length === 2 ? '两套' : '新版'} WindBot 已就绪，开始创建对局`,
             );
             this.markChanged('running');
-            context.scorePoller = this.pollScores(context);
+            if (context.kind !== 'tag') {
+                context.scorePoller = this.pollScores(context);
+            }
             await this.scheduleGames(context);
 
-            if (context.kind === 'ranking') {
+            if (context.kind === 'ranking' || context.kind === 'tag') {
                 throw new Error('无限测试的调度意外结束');
             }
             this.database.setRunStatus(context.id, 'settling');
@@ -645,21 +695,24 @@ class ArenaService {
             output: '',
             updatedAt: new Date().toISOString(),
         };
+        this.windbotErrorLineBuffers[name] = '';
         // .NET Framework WindBot 在 Windows 重定向输出时使用系统中文代码页，而不是 UTF-8。
-        const captureOutput = (stream, outputPrefix, logPrefix, destination) => {
+        const captureOutput = (stream, outputPrefix, logPrefix, destination, scanErrors = false) => {
             const decoder = new TextDecoder('gbk');
-            const write = (output) => {
-                if (!output) {
-                    return;
+            const write = (output, flush = false) => {
+                if (output) {
+                    this.appendWindBotOutput(name, `${outputPrefix}${output}`);
+                    destination.write(`${logPrefix}${output}`);
                 }
-                this.appendWindBotOutput(name, `${outputPrefix}${output}`);
-                destination.write(`${logPrefix}${output}`);
+                if (scanErrors) {
+                    this.scanWindBotErrors(name, output, flush);
+                }
             };
             stream.on('data', (data) => write(decoder.decode(data, { stream: true })));
-            stream.on('end', () => write(decoder.decode()));
+            stream.on('end', () => write(decoder.decode(), true));
         };
         captureOutput(child.stdout, '', `[${label}] `, process.stdout);
-        captureOutput(child.stderr, '[错误] ', `[${label}:错误] `, process.stderr);
+        captureOutput(child.stderr, '[错误] ', `[${label}:错误] `, process.stderr, true);
         child.on('error', (error) => {
             child.startError = error;
             this.appendWindBotOutput(name, `\n[启动失败] ${error.message}\n`);
@@ -961,7 +1014,7 @@ class ArenaService {
         context.nextRoomNumber = roomNumber === DUEL_ROOM_MAX
             ? DUEL_ROOM_MIN
             : roomNumber + 1;
-        return `M#${roomNumber}`;
+        return `${context.kind === 'tag' ? 'T' : 'M'}#${roomNumber}`;
     }
 
     async addBot(context, competitor, password) {
@@ -1027,16 +1080,16 @@ class ArenaService {
         }
     }
 
-    async launchPair(context, players) {
-        const roomsPerSecond = context.settings.srvpro.roomsPerSecond ?? 1;
-        const joinDelayMs = SCHEDULE_POLL_MS / (roomsPerSecond * 2);
+    async launchRoom(context, players) {
+        const roomsPerSecond = getRoomLaunchRate(context);
+        const joinDelayMs = SCHEDULE_POLL_MS / (roomsPerSecond * players.length);
         for (let attempt = 1; attempt <= WINDBOT_REQUEST_ATTEMPTS; attempt++) {
             const password = this.nextDuelPassword(context);
             try {
-                await this.addBot(context, players[0], password);
-                await sleep(joinDelayMs, context.abortController.signal);
-                await this.addBot(context, players[1], password);
-                await sleep(joinDelayMs, context.abortController.signal);
+                for (const player of players) {
+                    await this.addBot(context, player, password);
+                    await sleep(joinDelayMs, context.abortController.signal);
+                }
                 return;
             } catch (error) {
                 let launchError = error;
@@ -1071,7 +1124,7 @@ class ArenaService {
         const players = matchup.launchedGames % 2 === 0
             ? matchup.competitors
             : [...matchup.competitors].reverse();
-        await this.launchPair(context, players);
+        await this.launchRoom(context, players);
     }
 
     async launchRankingPair(context, entries) {
@@ -1079,15 +1132,28 @@ class ArenaService {
         if (Math.random() < 0.5) {
             players.reverse();
         }
-        await this.launchPair(context, players);
+        await this.launchRoom(context, players);
+    }
+
+    async launchTagGroup(context, entries) {
+        const players = entries.map((entry) => entry.competitors[0]);
+        for (let index = players.length - 1; index > 0; index--) {
+            const swapIndex = Math.floor(Math.random() * (index + 1));
+            [players[index], players[swapIndex]] = [players[swapIndex], players[index]];
+        }
+        await this.launchRoom(context, players);
     }
 
     async scheduleGames(context) {
         const { srvpro } = context.settings;
-        const roomsPerSecond = srvpro.roomsPerSecond ?? 1;
+        const roomsPerSecond = getRoomLaunchRate(context);
         let consecutiveErrors = 0;
         let launchedGames = 0;
-        while (context.kind === 'ranking' || launchedGames < context.totalGames) {
+        while (
+            context.kind === 'ranking'
+            || context.kind === 'tag'
+            || launchedGames < context.totalGames
+        ) {
             const pollStartedAt = Date.now();
             try {
                 const roomCount = await this.getRoomCount(context);
@@ -1096,7 +1162,7 @@ class ArenaService {
                 const toLaunch = Math.min(
                     availableRooms,
                     roomsPerSecond,
-                    context.kind === 'ranking'
+                    context.kind === 'ranking' || context.kind === 'tag'
                         ? roomsPerSecond
                         : context.totalGames - launchedGames,
                 );
@@ -1110,6 +1176,17 @@ class ArenaService {
                         }
                         const entries = [context.matchups[firstIndex], context.matchups[secondIndex]];
                         await this.launchRankingPair(context, entries);
+                        entries.forEach((entry) => { entry.launchedGames++; });
+                        launchedGames++;
+                        this.database.recordLaunch(context.id, entries.map((entry) => entry.id));
+                        this.markChanged('progress');
+                        continue;
+                    }
+                    if (context.kind === 'tag') {
+                        const entries = Array.from({ length: 4 }, () => (
+                            context.matchups[Math.floor(Math.random() * context.matchups.length)]
+                        ));
+                        await this.launchTagGroup(context, entries);
                         entries.forEach((entry) => { entry.launchedGames++; });
                         launchedGames++;
                         this.database.recordLaunch(context.id, entries.map((entry) => entry.id));
@@ -1157,7 +1234,11 @@ class ArenaService {
                     throw new Error('连续 10 次无法查询房间或创建 bot，已停止调度');
                 }
             }
-            if (context.kind !== 'ranking' && launchedGames >= context.totalGames) {
+            if (
+                context.kind !== 'ranking'
+                && context.kind !== 'tag'
+                && launchedGames >= context.totalGames
+            ) {
                 return;
             }
             const remainingPollMs = Math.max(0, SCHEDULE_POLL_MS - (Date.now() - pollStartedAt));
@@ -1336,6 +1417,7 @@ class ArenaService {
 
 module.exports = {
     ArenaService,
+    getRoomLaunchRate,
     SCHEDULE_POLL_MS,
     SCORE_POLL_MS,
     SETTLE_TIMEOUT_MS,

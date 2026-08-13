@@ -293,3 +293,40 @@ test('ArenaDatabase represents unlimited ranking entries and counts launched pai
     assert.equal(updated.matchups[0].currentWinRate, 2 / 3);
     assert.equal(updated.observedGames, 9);
 });
+
+test('ArenaDatabase counts all WindBot output errors for a tag run', (context) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'windbot-arena-tag-errors-db-'));
+    const database = new ArenaDatabase(path.join(tempDir, 'arena.sqlite'));
+    context.after(() => {
+        database.close();
+        fs.rmSync(tempDir, { force: true, recursive: true });
+    });
+    database.createRun({
+        config: { windbots: { current: { mode: 'local' } } },
+        createdAt: '2026-08-13T00:00:00.000Z',
+        gamesPerMatchup: 0,
+        id: 'tag-errors-1',
+        kind: 'tag',
+        srvproId: 'srvpro-1',
+        matchups: [{
+            aiLevel: 4,
+            competitors: [{
+                botLabel: 'Alpha',
+                deck: 'Alpha',
+                dialog: 'default',
+                endpointHost: '127.0.0.1',
+                endpointPort: 2399,
+                executionMode: 'local',
+                rankName: 'Alpha',
+                slot: 1,
+                source: 'current',
+            }],
+            label: 'Alpha',
+        }],
+    });
+    database.addEvent('tag-errors-1', 'error', 'windbot-output-error', 'first');
+    database.addEvent('tag-errors-1', 'warning', 'schedule-error', 'not WindBot output');
+    database.addEvent('tag-errors-1', 'error', 'windbot-output-error', 'second');
+
+    assert.equal(database.getRun('tag-errors-1').windbotOutputErrorCount, 2);
+});

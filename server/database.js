@@ -301,6 +301,13 @@ class ArenaDatabase {
                 (competitor) => competitor.source === 'target',
             )?.flee || 0;
         }
+        if (run.kind === 'tag') {
+            run.windbotOutputErrorCount = Number(this.db.prepare(`
+                SELECT COUNT(*) AS count
+                FROM run_events
+                WHERE run_id = ? AND event_type = 'windbot-output-error'
+            `).get(runId).count);
+        }
         run.matchups = matchupRows.map((matchup) => {
             const competitors = competitorsByMatchup.get(matchup.id) || [];
             if (run.kind === 'challenge' && competitors.length > 1) {

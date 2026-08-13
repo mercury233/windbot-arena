@@ -7,6 +7,7 @@ const { PassThrough } = require('node:stream');
 const test = require('node:test');
 const {
     ArenaService,
+    getRoomLaunchRate,
     SCHEDULE_POLL_MS,
     SCORE_POLL_MS,
     SETTLE_TIMEOUT_MS,
@@ -61,6 +62,45 @@ test('ranking scheduler draws two distinct random entries and records one pair l
     assert.ok(launches.every((launch) => launch.matchupIds.length === 2));
     assert.ok(launches.every((launch) => new Set(launch.matchupIds).size === 2));
     assert.equal(context.matchups.reduce((sum, entry) => sum + entry.launchedGames, 0), 40);
+});
+
+test('tag scheduler draws four candidates with replacement for every room', async () => {
+    const launches = [];
+    const database = {
+        addEvent() {},
+        recordLaunch(runId, matchupIds) {
+            launches.push({ matchupIds, runId });
+        },
+        setRoomCount() {},
+    };
+    const service = new ArenaService({}, database);
+    const context = makeSchedulingContext('tag', ['A']);
+    service.getRoomCount = async () => 0;
+    service.launchTagGroup = async (activeContext, entries) => {
+        assert.equal(activeContext, context);
+        assert.equal(entries.length, 4);
+        assert.deepEqual(entries.map((entry) => entry.id), [1, 1, 1, 1]);
+        if (launches.length === 20) {
+            context.abortController.abort(new DOMException('测试结束', 'AbortError'));
+            throw context.abortController.signal.reason;
+        }
+    };
+
+    await assert.rejects(service.scheduleGames(context), /测试结束/);
+    assert.equal(launches.length, 20);
+    assert.ok(launches.every((launch) => launch.matchupIds.length === 4));
+    assert.ok(launches.every((launch) => launch.matchupIds.every((id) => id === 1)));
+    assert.equal(context.matchups.reduce((sum, entry) => sum + entry.launchedGames, 0), 80);
+});
+
+test('tag rooms use half of the configured launch rate', () => {
+    const normal = makeSchedulingContext('ranking', ['A', 'B']);
+    const tag = makeSchedulingContext('tag', ['A', 'B', 'C', 'D']);
+    normal.settings.srvpro.roomsPerSecond = 5;
+    tag.settings.srvpro.roomsPerSecond = 5;
+
+    assert.equal(getRoomLaunchRate(normal), 5);
+    assert.equal(getRoomLaunchRate(tag), 2.5);
 });
 
 test('challenge scheduler rotates through opponents in list order and stops at the target', async () => {
@@ -208,6 +248,43 @@ test('pair launches use one duel password per pair and never reuse it', async (c
     ]);
     assert.ok(requests.every((url) => url.searchParams.get('host') === 'srvpro.lan'));
     assert.ok(requests.every((url) => url.searchParams.get('port') === '7911'));
+});
+
+test('tag launches send four randomly seated bots to one T room', async (context) => {
+    const service = new ArenaService({}, {});
+    const activeContext = {
+        abortController: new AbortController(),
+        kind: 'tag',
+        nextRoomNumber: 223456789,
+        settings: {
+            srvpro: { duelPort: 7911, host: 'srvpro.lan', roomsPerSecond: 100 },
+        },
+    };
+    const entries = ['A', 'B', 'C', 'D'].map((name, index) => ({
+        competitors: [{
+            deck: `${name}-deck`,
+            dialog: null,
+            endpointHost: `${name.toLowerCase()}.lan`,
+            endpointPort: 2399 + index,
+            rankName: name,
+        }],
+    }));
+    const requests = [];
+    const originalFetch = global.fetch;
+    context.after(() => { global.fetch = originalFetch; });
+    global.fetch = async (url) => {
+        requests.push(new URL(url));
+        return new Response(null, { status: 200 });
+    };
+
+    await service.launchTagGroup(activeContext, entries);
+
+    assert.equal(requests.length, 4);
+    assert.ok(requests.every((url) => url.searchParams.get('password') === 'T#223456789'));
+    assert.deepEqual(
+        requests.map((url) => url.searchParams.get('name')).sort(),
+        ['A', 'B', 'C', 'D'],
+    );
 });
 
 test('pair launch closes timed-out rooms and retries with a new password', async (context) => {
@@ -799,6 +876,55 @@ test('challenge run defaults to 100 games per opponent and has a finite total', 
     assert.equal(persistedRun.matchups[0].competitors[1].endpointHost, 'current.lan');
 });
 
+test('tag run keeps all selected candidates and runs without a target game count', () => {
+    const settings = createDefaultArenaSettings();
+    Object.assign(settings.srvpros[0], {
+        host: 'srvpro.lan',
+        password: 'secret',
+        username: 'arena',
+    });
+    Object.assign(settings.windbots.current, {
+        botConfText: [
+            '!Alpha',
+            'Name=Alpha Deck=Alpha Dialog=default',
+            '!Beta',
+            'Name=Beta Deck=Beta Dialog=default',
+            '!Gamma',
+            'Name=Gamma Deck=Gamma Dialog=default',
+            '!Delta',
+            'Name=Delta Deck=Delta Dialog=default',
+            '!Epsilon',
+            'Name=Epsilon Deck=Epsilon Dialog=default',
+        ].join('\n'),
+        host: 'current.lan',
+        mode: 'remote',
+    });
+    let persistedRun;
+    const service = new ArenaService({}, {
+        createRun(run) {
+            persistedRun = run;
+            return {
+                ...run,
+                matchups: run.matchups.map((matchup, index) => ({ ...matchup, id: index + 1 })),
+            };
+        },
+        getArenaSettings: () => ({ settings }),
+    });
+    service.execute = async () => {};
+
+    service.createRun({
+        decks: ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon'],
+        kind: 'tag',
+    });
+
+    assert.equal(persistedRun.gamesPerMatchup, 0);
+    assert.deepEqual(
+        persistedRun.matchups.map((entry) => entry.label),
+        ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon'],
+    );
+    assert.equal(service.contexts.get('srvpro-1').totalGames, 0);
+});
+
 test('run context keeps persisted matchup ids aligned when stored rows are sorted', () => {
     const settings = createDefaultArenaSettings();
     Object.assign(settings.srvpros[0], {
@@ -978,10 +1104,13 @@ test('room inspection authenticates server-side and exposes only display fields'
             rooms: [{
                 istart: 'Duel:2 Turn:10',
                 roomid: '2937844',
-                roomname: 'M,RANDOM#85468',
+                roommode: 2,
+                roomname: 'T#85468',
                 users: [
                     { ip: '192.0.2.1', name: '新版', pos: 0, status: { lp: 8000, score: 1 } },
                     { ip: '192.0.2.2', name: '旧版', pos: 1, status: { lp: 8000, score: 0 } },
+                    { ip: '192.0.2.4', name: '队友', pos: 2, status: { lp: 8000, score: 1 } },
+                    { ip: '192.0.2.5', name: '对手', pos: 3, status: { lp: 8000, score: 0 } },
                     { ip: '192.0.2.3', name: '观战者', pos: 7, status: null },
                 ],
             }],
@@ -992,10 +1121,13 @@ test('room inspection authenticates server-side and exposes only display fields'
     assert.equal(result.enableHalfwayWatch, false);
     assert.deepEqual(result.rooms, [{
         id: '2937844',
-        name: 'M,RANDOM#85468',
+        mode: 2,
+        name: 'T#85468',
         players: [
-            { name: '新版', status: { lp: 8000, score: 1 } },
-            { name: '旧版', status: { lp: 8000, score: 0 } },
+            { name: '新版', position: 0, status: { lp: 8000, score: 1 } },
+            { name: '旧版', position: 1, status: { lp: 8000, score: 0 } },
+            { name: '队友', position: 2, status: { lp: 8000, score: 1 } },
+            { name: '对手', position: 3, status: { lp: 8000, score: 0 } },
         ],
         status: 'Duel:2 Turn:10',
     }]);
@@ -1093,6 +1225,42 @@ test('WindBot output inspection distinguishes local and remote instances', () =>
         updatedAt: null,
     });
     assert.throws(() => service.getWindBotOutput('unknown'), (error) => error.statusCode === 404);
+});
+
+test('local WindBot stderr errors are recorded for running tag tasks', () => {
+    const events = [];
+    const service = new ArenaService({}, {
+        addEvent(...args) { events.push(args); },
+    });
+    const makeContext = (id, kind, mode, running = true) => ({
+        id,
+        kind,
+        running,
+        settings: { windbots: { current: { mode } } },
+    });
+    service.contexts.set('local-tag', makeContext('local-tag', 'tag', 'local'));
+    service.contexts.set('remote-tag', makeContext('remote-tag', 'tag', 'remote'));
+    service.contexts.set('ranking', makeContext('ranking', 'ranking', 'local'));
+    service.contexts.set('starting-tag', makeContext('starting-tag', 'tag', 'local', false));
+
+    service.scanWindBotErrors('current', '[26-08-13 12:00:00] Invalid card selec');
+    assert.deepEqual(events, []);
+    service.scanWindBotErrors(
+        'current',
+        'tion, using a legal fallback.\r\nContext: Instance=1, Bot=Alpha\r\n',
+    );
+    service.scanWindBotErrors('current', '[26-08-13 12:00:01] Tick Error\r\n');
+    service.scanWindBotErrors('old', '[26-08-13 12:00:02] Old error\r\n');
+
+    assert.deepEqual(events, [
+        [
+            'local-tag',
+            'error',
+            'windbot-output-error',
+            'WindBot 输出错误: Invalid card selection, using a legal fallback.',
+        ],
+        ['local-tag', 'error', 'windbot-output-error', 'WindBot 输出错误: Tick Error'],
+    ]);
 });
 
 test('local WindBot output is decoded from the Windows Chinese code page', (context) => {

@@ -390,6 +390,16 @@ input {
     border-bottom: 0;
 }
 
+.room-team-members {
+    display: grid;
+    gap: 6px;
+}
+
+.metric strong.unavailable-value {
+    color: #607780;
+    white-space: nowrap;
+}
+
 .room-name-button {
     padding: 2px 4px;
     border: 0;
@@ -1161,6 +1171,10 @@ html[data-theme='light'] {
 [data-theme='light'] .deck-option-main strong,
 html[data-theme='light'] body .instance-heading h3 {
     color: #102a32;
+}
+
+[data-theme='light'] .metric strong.unavailable-value {
+    color: #71858b;
 }
 
 [data-theme='light'] .primary-metric .progress-value span {

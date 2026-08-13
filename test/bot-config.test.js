@@ -9,6 +9,7 @@ const {
     buildChallengeMatchups,
     buildRankingEntries,
     buildRegressionMatchups,
+    buildTagEntries,
     getRegressionCatalog,
     inspectConfiguration,
     parseBotConfig,
@@ -242,6 +243,32 @@ test('ranking creates one current WindBot entry per selected deck', () => {
     assert.throws(() => buildRankingEntries(settings, ['Dragon']), /至少需要两个卡组/);
 });
 
+test('tag smoke test creates one current WindBot entry for each candidate deck', () => {
+    const settings = createDefaultArenaSettings();
+    settings.windbots.current = {
+        ...settings.windbots.current,
+        botConfText: botConfig,
+        host: 'windbot-current.lan',
+        mode: 'remote',
+    };
+    const entries = buildTagEntries(settings, [
+        'Dragon',
+        'Deck With Spaces',
+        'Beginner',
+        'Unleveled',
+    ]);
+
+    assert.deepEqual(entries.map((entry) => entry.label), [
+        'Dragon',
+        'Deck With Spaces',
+        'Beginner',
+        'Unleveled',
+    ]);
+    assert.ok(entries.every((entry) => entry.competitors.length === 1));
+    assert.ok(entries.every((entry) => entry.competitors[0].source === 'current'));
+    assert.equal(buildTagEntries(settings, ['Dragon']).length, 1);
+});
+
 test('current-only modes remain available when the old WindBot is not configured', () => {
     const settings = createDefaultArenaSettings();
     settings.srvpros[0] = {
@@ -260,6 +287,7 @@ test('current-only modes remain available when the old WindBot is not configured
     assert.equal(inspection.modes.challenge.valid, true);
     assert.equal(inspection.modes.challengeOld.valid, false);
     assert.equal(inspection.modes.ranking.valid, true);
+    assert.equal(inspection.modes.tag.valid, true);
     assert.equal(inspection.modes.regression.valid, false);
     assert.equal(inspection.currentDecks.length, 4);
     assert.equal(inspection.oldDecks.length, 0);

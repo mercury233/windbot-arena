@@ -316,6 +316,34 @@ function buildRankingEntries(settings, requestedDecks) {
     return entries;
 }
 
+function buildTagEntries(settings, requestedDecks) {
+    const instance = settings.windbots.current;
+    validateWindBotRuntime(instance, '新版');
+    const catalog = getCurrentCatalog(settings);
+    const catalogByDeck = new Map(catalog.map((bot) => [bot.deck, bot]));
+    const selectedDecks = requestedDecks?.length
+        ? [...new Set(requestedDecks.map((deck) => deck.trim()))]
+        : catalog.filter((bot) => bot.aiLevel !== 1).map((bot) => bot.deck);
+    const missing = selectedDecks.filter((deck) => !catalogByDeck.has(deck));
+    if (missing.length > 0) {
+        throw new Error(`这些卡组不在新版 bot.conf 列表中：${missing.join(', ')}`);
+    }
+    if (selectedDecks.length === 0) {
+        throw new Error('双打冒烟测试至少需要一个测试卡组');
+    }
+
+    const entries = selectedDecks.map((deck) => {
+        const bot = catalogByDeck.get(deck);
+        return {
+            aiLevel: bot.aiLevel,
+            competitors: [makeCompetitor(instance, bot, 'current', 1, bot.label)],
+            label: deck,
+        };
+    });
+    validateRankNames(entries, settings);
+    return entries;
+}
+
 function inspectConfiguration(settings, selectedSrvpro = settings.srvpro || settings.srvpros?.[0]) {
     const baseIssues = [];
     const srvpro = selectedSrvpro || {};
@@ -424,6 +452,7 @@ function inspectConfiguration(settings, selectedSrvpro = settings.srvpro || sett
             challengeOld: { issues: oldChallengeIssues, valid: oldChallengeIssues.length === 0 },
             ranking: currentMode,
             regression: { issues: regressionIssues, valid: regressionIssues.length === 0 },
+            tag: currentMode,
         },
         oldDecks,
         valid: regressionIssues.length === 0,
@@ -434,6 +463,7 @@ module.exports = {
     buildChallengeMatchups,
     buildRankingEntries,
     buildRegressionMatchups,
+    buildTagEntries,
     getCurrentCatalog,
     getOldCatalog,
     getRegressionCatalog,
