@@ -25,7 +25,7 @@ import {
 const SettingsModal = defineAsyncComponent(() => import('./SettingsModal.vue'));
 
 defineProps({
-    darkMode: { type: Boolean, default: true },
+    darkMode: { type: Boolean, default: false },
 });
 const emit = defineEmits(['update:darkMode']);
 
@@ -222,6 +222,11 @@ const displayedRun = computed(() => selectedRun.value);
 const historyPageCount = computed(() => Math.max(1, Math.ceil(
     historyTotal.value / historyPageSize,
 )));
+const historyPlaceholderCount = computed(() => (
+    historyPageCount.value > 1 && historyPage.value === historyPageCount.value
+        ? Math.max(0, historyPageSize - runs.value.length)
+        : 0
+));
 const selectedSrvpro = computed(() => (
     system.value?.srvpros.find((srvpro) => srvpro.id === selectedSrvproId.value) || null
 ));
@@ -1192,15 +1197,21 @@ onBeforeUnmount(() => {
                 </span>
             </a>
             <div class="topbar-actions">
-                <label class="theme-control">
-                    <span>暗黑模式</span>
+                <div class="theme-control" title="切换日间 / 夜间模式">
+                    <svg class="theme-icon" :class="{ active: !darkMode }" viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="12" cy="12" r="4"></circle>
+                        <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42"></path>
+                    </svg>
                     <n-switch
                         :value="darkMode"
                         size="small"
-                        aria-label="切换暗黑模式"
+                        aria-label="切换日间 / 夜间模式"
                         @update:value="emit('update:darkMode', $event)"
                     />
-                </label>
+                    <svg class="theme-icon" :class="{ active: darkMode }" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M20.6 15.7A9 9 0 0 1 8.3 3.4 9 9 0 1 0 20.6 15.7Z"></path>
+                    </svg>
+                </div>
                 <n-button size="small" quaternary @click="openSettings">系统配置</n-button>
             </div>
         </header>
@@ -1801,6 +1812,21 @@ onBeforeUnmount(() => {
                                         </template>
                                         确定删除这项运行历史？此操作无法撤销。
                                     </n-popconfirm>
+                                </div>
+                                <div
+                                    v-for="index in historyPlaceholderCount"
+                                    :key="`placeholder-${index}`"
+                                    class="history-entry history-entry-placeholder"
+                                    aria-hidden="true"
+                                >
+                                    <div class="history-item">
+                                        <span class="history-status"></span>
+                                        <span class="history-main">
+                                            <strong>&nbsp;</strong>
+                                            <small>&nbsp;</small>
+                                        </span>
+                                        <code>&nbsp;</code>
+                                    </div>
                                 </div>
                             </div>
                             <div v-if="historyTotal > historyPageSize" class="history-pagination">

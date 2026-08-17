@@ -58,9 +58,9 @@ const lightThemeOverrides = {
     },
 };
 
-let initialDarkMode = true;
+let initialDarkMode = false;
 try {
-    initialDarkMode = localStorage.getItem('windbot-arena-theme') !== 'light';
+    initialDarkMode = localStorage.getItem('windbot-arena-theme') === 'dark';
 } catch {
     // 浏览器禁止本地存储时仍可在当前页面切换主题。
 }

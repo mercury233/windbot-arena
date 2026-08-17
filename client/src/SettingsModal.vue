@@ -325,6 +325,10 @@ function removeSrvpro(index) {
 }
 
 @media (max-width: 640px) {
+    .instance-heading span {
+        font-size: 12px;
+    }
+
     .settings-grid {
         grid-template-columns: 1fr;
     }
