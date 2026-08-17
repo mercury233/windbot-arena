@@ -184,7 +184,7 @@ class ArenaDatabase {
                     );
                 }
             });
-            this.addEvent(run.id, 'info', 'created', `已创建 ${run.matchups.length} 个卡组`);
+            this.addEvent(run.id, 'info', 'created', `测试已创建，使用 ${run.matchups.length} 个卡组`);
         });
         return this.getRun(run.id);
     }

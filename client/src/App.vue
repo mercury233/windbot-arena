@@ -673,7 +673,7 @@ async function updateHalfwayWatch(enabled) {
             return;
         }
         inspectorHalfwayWatchEnabled.value = result.enableHalfwayWatch;
-        message.success(result.enableHalfwayWatch ? '已启用新建房间的中途观战' : '已禁用新建房间的中途观战');
+        message.success(result.enableHalfwayWatch ? '已启用新建房间的观战' : '已禁用新建房间的观战');
     } catch (error) {
         if (
             request === inspectorRequest
@@ -1887,7 +1887,7 @@ onBeforeUnmount(() => {
                 <template #header-extra>
                     <div class="inspector-header-actions">
                         <label v-if="inspectorKind === 'srvpro'" class="halfwaywatch-control">
-                            <span>允许中途观战</span>
+                            <span>允许观战</span>
                             <n-switch
                                 :value="inspectorHalfwayWatchEnabled === true"
                                 :disabled="inspectorHalfwayWatchEnabled === null"

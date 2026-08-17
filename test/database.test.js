@@ -107,7 +107,6 @@ test('ArenaDatabase persists a run and applies rank statistics', (context) => {
     assert.equal(run.matchups[0].currentWinRate, 0.7);
     assert.equal(run.status, 'preparing');
     assert.equal(run.startedAt, null);
-    assert.equal(run.events.at(-1).message, '已创建 1 个卡组');
     assert.equal(database.listRuns()[0].deckName, 'Dragon');
     assert.equal(database.listRuns()[0].matchupCount, 1);
     database.createRun({

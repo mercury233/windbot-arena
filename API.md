@@ -174,7 +174,7 @@ GET /api/runs/{id}
         "at": "2026-08-13T08:30:00.000Z",
         "id": 101,
         "level": "info",
-        "message": "已创建 1 个卡组",
+        "message": "测试已创建，使用 1 个卡组",
         "type": "created"
       }
     ],

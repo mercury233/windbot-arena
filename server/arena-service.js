@@ -277,14 +277,14 @@ class ArenaService {
 
     async updateHalfwayWatch(srvproId, enabled) {
         if (typeof enabled !== 'boolean') {
-            throw requestError('是否允许中途观战必须是布尔值');
+            throw requestError('是否允许观战必须是布尔值');
         }
         const record = this.database.getArenaSettings();
         const srvpro = this.getSrvpro(record.settings, srvproId || record.settings.srvpros[0].id);
         try {
             await this.setSrvproHalfwayWatch(srvpro, enabled);
         } catch (error) {
-            throw requestError(`无法设置 SRVPro 中途观战选项: ${error.message}`, 502);
+            throw requestError(`无法设置 SRVPro 观战选项: ${error.message}`, 502);
         }
 
         return {
@@ -600,7 +600,7 @@ class ArenaService {
     async execute(context) {
         const { signal } = context.abortController;
         try {
-            this.database.addEvent(context.id, 'info', 'preparing', '正在重启 SRVPro 并清理旧对局');
+            this.database.addEvent(context.id, 'info', 'preparing', '正在重启 SRVPro');
             this.markChanged('preparing');
             await this.rebootServer(context);
             this.database.addEvent(context.id, 'info', 'server-ready', 'SRVPro 已重启并恢复服务');
@@ -809,13 +809,13 @@ class ArenaService {
         url.searchParams.set('username', srvpro.username);
         url.searchParams.set('pass', srvpro.password);
         url.searchParams.set('enabled', String(enabled));
-        const response = await fetchSrvproApi(url, 'SRVPro 中途观战设置 API ', 5000, signal);
+        const response = await fetchSrvproApi(url, 'SRVPro 观战设置 API ', 5000, signal);
         if (!response.ok) {
-            throw new Error(`中途观战设置 API 返回 HTTP ${response.status}`);
+            throw new Error(`观战设置 API 返回 HTTP ${response.status}`);
         }
         const body = await response.json();
         if (body?.enableHalfwayWatch !== enabled) {
-            throw new Error('中途观战设置 API 未返回预期状态');
+            throw new Error('观战设置 API 未返回预期状态');
         }
         return getServerInstanceId(response, body);
     }

@@ -1167,7 +1167,7 @@ test('halfway watch updates SRVPro without storing a second Arena setting', asyn
     const service = new ArenaService({}, {
         getArenaSettings: () => ({ settings }),
         saveArenaSettings() {
-            assert.fail('实时中途观战状态不应写入 Arena 设置');
+            assert.fail('实时观战状态不应写入 Arena 设置');
         },
     });
     const calls = [];
