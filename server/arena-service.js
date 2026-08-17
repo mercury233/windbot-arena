@@ -791,9 +791,6 @@ class ArenaService {
         if (!Array.isArray(body.rooms)) {
             throw new Error('房间 API 响应中没有 rooms 数组');
         }
-        if (body.rooms.some((room) => room?.roomid === '0' && room?.roomname === '密码错误')) {
-            throw new Error('SRVPro 管理账号或密码错误');
-        }
         if (typeof body.enableHalfwayWatch !== 'boolean') {
             throw new Error('房间 API 响应中没有有效的 enableHalfwayWatch');
         }
@@ -1418,10 +1415,6 @@ class ArenaService {
 module.exports = {
     ArenaService,
     getRoomLaunchRate,
-    SCHEDULE_POLL_MS,
     SCORE_POLL_MS,
-    SETTLE_TIMEOUT_MS,
-    WINDBOT_REQUEST_ATTEMPTS,
-    WINDBOT_REQUEST_TIMEOUT_MS,
     requestError,
 };

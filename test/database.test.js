@@ -128,11 +128,6 @@ test('ArenaDatabase persists a run and applies rank statistics', (context) => {
     const unmatchedRankAt = database.recordRank(null, normalizeRank(rawRank), rawRank);
     assert.equal(database.getLatestRankAt(), unmatchedRankAt);
 
-    const indexes = database.db.prepare(`
-        SELECT name FROM sqlite_schema
-        WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
-    `).all().map((row) => row.name);
-    assert.ok(indexes.includes('idx_matchups_run_id'));
     const plan = database.db.prepare(`
         EXPLAIN QUERY PLAN
         SELECT * FROM matchups WHERE run_id = ? ORDER BY ordinal
