@@ -696,8 +696,7 @@ input {
     align-items: center;
 }
 
-.results-meta code,
-.history-item code {
+.results-meta code {
     color: #4c656e;
     font-family: 'DM Mono', monospace;
     font-size: 12px;
@@ -907,7 +906,7 @@ input {
 
 .history-item {
     display: grid;
-    grid-template-columns: 8px minmax(0, 1fr) auto;
+    grid-template-columns: 8px minmax(0, 1fr);
     gap: 11px;
     align-items: center;
     width: 100%;
@@ -1303,7 +1302,6 @@ html[data-theme='light'] body .srvpro-instance {
 [data-theme='light'] .result-table .deck-cell small,
 [data-theme='light'] .metric strong small,
 [data-theme='light'] .results-meta code,
-[data-theme='light'] .history-item code,
 [data-theme='light'] .aside-heading > span,
 html[data-theme='light'] body .instance-heading span {
     color: #5c747b;
@@ -1488,7 +1486,6 @@ html[data-theme='light'] body .instance-heading span {
     .ai-level,
     .recent-deck,
     .results-meta code,
-    .history-item code,
     .result-table th,
     .result-table td,
     .result-table .deck-cell small,

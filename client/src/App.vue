@@ -1792,7 +1792,6 @@ onBeforeUnmount(() => {
                                                 · {{ statusLabels[run.status] }}
                                             </small>
                                         </span>
-                                        <code>{{ run.id.slice(0, 8).toUpperCase() }}</code>
                                     </button>
                                     <n-popconfirm
                                         v-if="terminalStatuses.has(run.status)"
@@ -1826,7 +1825,6 @@ onBeforeUnmount(() => {
                                             <strong>&nbsp;</strong>
                                             <small>&nbsp;</small>
                                         </span>
-                                        <code>&nbsp;</code>
                                     </div>
                                 </div>
                             </div>
