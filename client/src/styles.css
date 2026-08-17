@@ -163,7 +163,7 @@ input {
 .future-panel > span {
     color: #63e6d3;
     font-family: 'DM Mono', monospace;
-    font-size: 10px;
+    font-size: 12px;
     letter-spacing: 0.18em;
 }
 
@@ -256,7 +256,7 @@ input {
     margin-bottom: 8px;
     color: #5f7780;
     font-family: 'DM Mono', monospace;
-    font-size: 9px;
+    font-size: 12px;
     letter-spacing: 0.1em;
 }
 
@@ -287,7 +287,7 @@ input {
     overflow: hidden;
     color: #cbd9dd;
     font-family: 'DM Mono', monospace;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -384,7 +384,7 @@ input {
     border-bottom: 1px solid #1c3038;
     color: #afc0c5;
     font-family: 'DM Mono', monospace;
-    font-size: 11px;
+    font-size: 12px;
     text-align: left;
     white-space: nowrap;
 }
@@ -395,7 +395,7 @@ input {
     top: 0;
     color: #607780;
     background: #0c181e;
-    font-size: 9px;
+    font-size: 12px;
     font-weight: 500;
     letter-spacing: 0.08em;
 }
@@ -459,7 +459,7 @@ input {
 .inspector-footer > span {
     color: #607780;
     font-family: 'DM Mono', monospace;
-    font-size: 9px;
+    font-size: 12px;
 }
 
 .panel-heading,
@@ -481,7 +481,7 @@ input {
 .section-index {
     color: #3d555e;
     font-family: 'DM Mono', monospace;
-    font-size: 10px;
+    font-size: 12px;
     line-height: 25px;
 }
 
@@ -555,7 +555,7 @@ input {
 .deck-list-toggle small {
     color: #5c7b84;
     font-family: 'DM Mono', monospace;
-    font-size: 9px;
+    font-size: 12px;
 }
 
 .deck-options {
@@ -608,14 +608,14 @@ input {
 .deck-option-main small {
     margin-top: 2px;
     color: #58727b;
-    font-size: 9px;
+    font-size: 12px;
 }
 
 .ai-level {
     flex: 0 0 auto;
     color: #8ba1a8;
     font-family: 'DM Mono', monospace;
-    font-size: 9px;
+    font-size: 12px;
 }
 
 .deck-option-tags {
@@ -631,7 +631,7 @@ input {
     border-radius: 999px;
     color: #63e6d3;
     font-family: 'DM Mono', monospace;
-    font-size: 8px;
+    font-size: 12px;
 }
 
 .deck-options-empty {
@@ -700,7 +700,7 @@ input {
 .history-item code {
     color: #4c656e;
     font-family: 'DM Mono', monospace;
-    font-size: 10px;
+    font-size: 12px;
 }
 
 .metric-grid {
@@ -794,7 +794,7 @@ input {
 .result-table th {
     color: #59717a;
     font-family: 'DM Mono', monospace;
-    font-size: 9px;
+    font-size: 12px;
     font-weight: 500;
     letter-spacing: 0.06em;
 }
@@ -802,7 +802,7 @@ input {
 .result-table td {
     color: #9eb0b6;
     font-family: 'DM Mono', monospace;
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .result-table tbody tr:hover {
@@ -827,7 +827,7 @@ input {
 .result-table .deck-cell small {
     margin-top: 2px;
     color: #526a73;
-    font-size: 9px;
+    font-size: 12px;
 }
 
 .result-table .current-score,
@@ -873,7 +873,7 @@ input {
 .aside-heading > span {
     color: #4e6770;
     font-family: 'DM Mono', monospace;
-    font-size: 10px;
+    font-size: 12px;
 }
 
 .history-list {
@@ -902,7 +902,7 @@ input {
 .history-pagination > span {
     color: #587079;
     font-family: 'DM Mono', monospace;
-    font-size: 9px;
+    font-size: 12px;
 }
 
 .history-item {
@@ -1027,14 +1027,14 @@ input {
 
 .history-main strong {
     color: #bfced2;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
 }
 
 .history-main small {
     margin-top: 4px;
     color: #586f77;
-    font-size: 9px;
+    font-size: 12px;
 }
 
 .event-list {
@@ -1056,12 +1056,12 @@ input {
 .event-list time {
     color: #4f6871;
     font-family: 'DM Mono', monospace;
-    font-size: 9px;
+    font-size: 12px;
 }
 
 .event-list span {
     color: #879ba2;
-    font-size: 10px;
+    font-size: 12px;
     line-height: 1.5;
 }
 
@@ -1104,7 +1104,7 @@ input {
 .future-panel p {
     margin: 9px 0 0;
     color: #657c84;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.7;
 }
 
@@ -1130,7 +1130,7 @@ footer {
     border-top: 1px solid #182a31;
     color: #405860;
     font-family: 'DM Mono', monospace;
-    font-size: 9px;
+    font-size: 12px;
     letter-spacing: 0.08em;
 }
 

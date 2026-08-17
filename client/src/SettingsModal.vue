@@ -304,7 +304,7 @@ function removeSrvpro(index) {
 .instance-heading span {
     color: #52717b;
     font-family: 'DM Mono', monospace;
-    font-size: 9px;
+    font-size: 12px;
     letter-spacing: 0.12em;
 }
 
