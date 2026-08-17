@@ -121,16 +121,22 @@ const statusTypes = {
     stopping: 'warning',
 };
 const runKindLabels = {
+    regression: '新旧回归',
     challenge: '卡组挑战',
     ranking: '胜率排行',
-    regression: '新旧回归',
     tag: '双打冒烟',
 };
+const runKindIndexes = {
+    regression: '01',
+    challenge: '02',
+    tag: '03',
+    ranking: '04',
+};
 const runKindDescriptions = {
-    challenge: '指定卡组按列表顺序轮流对战全部或选中的对手，每组达到计划局数后自动完成。',
-    ranking: '从选中卡组中每局随机抽取两个对战，直到手动停止。',
     regression: '新版与旧版使用同一卡组，按计划局数进行回归对战。',
-    tag: '从选中卡组中每局随机组队进行双打，直到手动停止；不统计胜率。',
+    challenge: '指定卡组按列表顺序轮流对战全部或选中的对手，每组达到计划局数后自动完成。',
+    tag: '从选中卡组中每局随机组队进行双打，直到手动停止；创建房间速度自动减半，不统计胜率。',
+    ranking: '从选中卡组中每局随机抽取两个对战，直到手动停止。',
 };
 
 const regressionDeckOptions = computed(() => (system.value?.configuration.decks || []).map((item) => ({
@@ -868,9 +874,6 @@ function formatHistoryTitle(run) {
         const version = run.config?.challengerVersion === 'old' ? '旧版' : '新版';
         return `${label} · ${version} ${run.config?.targetDeck || '—'} VS ${matchupCount} 个卡组`;
     }
-    if (run.kind === 'tag') {
-        return `${label} · ${matchupCount} 个测试卡组`;
-    }
     const deckName = run.deckName || run.matchups?.[0]?.label;
     if (run.kind === 'regression' && matchupCount === 1 && deckName) {
         return `${label} · ${deckName} · 1 个卡组`;
@@ -1296,7 +1299,7 @@ onBeforeUnmount(() => {
                             </n-alert>
                             <div class="panel-heading">
                                 <div>
-                                    <span class="section-index">01</span>
+                                    <span class="section-index">{{ runKindIndexes[experimentKind] }}</span>
                                     <div>
                                         <div class="results-title-line">
                                             <h2>{{ runKindLabels[experimentKind] }}</h2>
@@ -1493,7 +1496,6 @@ onBeforeUnmount(() => {
                         <article v-if="displayedRun" class="panel results-panel">
                             <div class="results-header">
                                 <div>
-                                    <span class="section-index">02</span>
                                     <div>
                                         <div class="results-title-line">
                                             <h2>结果统计</h2>
@@ -1767,7 +1769,6 @@ onBeforeUnmount(() => {
                         <article class="panel history-panel">
                             <div class="aside-heading">
                                 <div>
-                                    <span class="section-index">03</span>
                                     <h2>运行历史</h2>
                                 </div>
                                 <span>{{ historyTotal }}</span>
@@ -1854,7 +1855,6 @@ onBeforeUnmount(() => {
                         <article v-if="displayedRun" class="panel event-panel">
                             <div class="aside-heading">
                                 <div>
-                                    <span class="section-index">04</span>
                                     <h2>任务事件</h2>
                                 </div>
                             </div>
