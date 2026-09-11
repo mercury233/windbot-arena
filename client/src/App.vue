@@ -1489,7 +1489,6 @@ onBeforeUnmount(() => {
                                                 text
                                                 type="primary"
                                                 size="tiny"
-                                                :disabled="hasActiveRuns"
                                                 :loading="refreshingDecks"
                                                 @click="refreshBotConfigs"
                                             >

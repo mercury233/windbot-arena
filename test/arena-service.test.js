@@ -1299,6 +1299,74 @@ test('saving a remote bot.conf URL fetches and persists its content', async (con
     assert.equal(changed.contentChanged, true);
 });
 
+for (const mode of ['local', 'remote']) {
+    for (const kind of ['regression', 'challenge', 'ranking', 'tag']) {
+        test(`${mode} bot.conf refresh preserves active ${kind} snapshots and updates new runs`, async (t) => {
+            const settings = createDefaultArenaSettings();
+            Object.assign(settings.srvpros[0], {
+                host: 'srvpro.lan', password: 'secret', username: 'arena',
+            });
+            settings.srvpros.push({ ...settings.srvpros[0], id: 'srvpro-2' });
+            const originalText = '!Alpha\nName=Alpha Deck=Alpha Dialog=default\n'
+                + '!Original Beta\nName=Beta Deck=Beta Dialog=default';
+            let configText = originalText;
+            for (const name of ['current', 'old']) {
+                Object.assign(settings.windbots[name], {
+                    botConfPath: `${name}/bot.conf`,
+                    botConfText: originalText,
+                    botConfUrl: `https://${name}.example.com/bot.conf`,
+                    host: `${name}.lan`,
+                    mode,
+                    runtimeDir: name,
+                });
+            }
+            if (mode === 'local') {
+                t.mock.method(require('node:fs'), 'existsSync', () => true);
+                t.mock.method(require('node:fs'), 'readFileSync', () => configText);
+            }
+            t.mock.method(global, 'fetch', async () => new Response(configText));
+            let savedSettings = settings;
+            const service = new ArenaService({}, {
+                getArenaSettings: () => ({ settings: savedSettings }),
+                saveArenaSettings(value) {
+                    savedSettings = structuredClone(value);
+                },
+                createRun(run) {
+                    return {
+                        ...run,
+                        matchups: run.matchups.map((matchup, index) => ({ ...matchup, id: index + 1 })),
+                    };
+                },
+            });
+            service.execute = async () => {};
+            const input = { kind, gamesPerMatchup: 1, ...(kind === 'challenge' ? { targetDeck: 'Beta' } : {}) };
+            service.createRun(input);
+            const active = service.contexts.get('srvpro-1');
+            const snapshot = structuredClone({ matchups: active.matchups, settings: active.settings });
+
+            configText = '!Renamed Beta\nName=Beta Deck=Beta Dialog=updated\n'
+                + '!Gamma\nName=Gamma Deck=Gamma Dialog=updated';
+            const result = await service.refreshBotConfigs();
+            assert.deepEqual(result.configuration.currentDecks.map((deck) => deck.deck), ['Beta', 'Gamma']);
+            assert.deepEqual({ matchups: active.matchups, settings: active.settings }, snapshot);
+            if (mode === 'remote') {
+                assert.equal(savedSettings.windbots.current.botConfText, configText);
+                assert.equal(active.settings.windbots.current.botConfText, originalText);
+            }
+
+            service.createRun({ ...input, srvproId: 'srvpro-2' });
+            const next = service.contexts.get('srvpro-2');
+            const competitors = next.matchups.flatMap((matchup) => matchup.competitors)
+                .filter((competitor) => kind !== 'challenge' || competitor.slot !== 1);
+            assert.deepEqual([...new Set(competitors.map((competitor) => competitor.deck))].sort(), ['Beta', 'Gamma']);
+            assert.ok(competitors.every((competitor) => competitor.dialog === 'updated'));
+            assert.ok(competitors.filter((competitor) => competitor.deck === 'Beta')
+                .every((competitor) => competitor.botLabel === 'Renamed Beta'));
+            assert.deepEqual({ matchups: active.matchups, settings: active.settings }, snapshot);
+        });
+    }
+}
+
 test('room inspection authenticates server-side and exposes only display fields', async (context) => {
     const settings = createDefaultArenaSettings();
     Object.assign(settings.srvpros[0], {

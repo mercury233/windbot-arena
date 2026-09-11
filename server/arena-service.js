@@ -426,15 +426,9 @@ class ArenaService {
     }
 
     async refreshBotConfigs() {
-        if (this.contexts.size > 0) {
-            throw requestError('测试运行期间不能刷新 bot.conf', 409);
-        }
         const record = this.database.getArenaSettings();
         const settings = structuredClone(record.settings);
         const { changedCount, fetchedCount } = await this.fetchRemoteBotConfigs(settings);
-        if (this.contexts.size > 0) {
-            throw requestError('测试运行期间不能刷新 bot.conf', 409);
-        }
         if (fetchedCount > 0) {
             this.database.saveArenaSettings(settings);
         }
@@ -566,6 +560,7 @@ class ArenaService {
             id,
             kind,
             latestObserved: new Map(),
+            // 调度只使用创建时的对局快照，刷新 bot.conf 不应改变活动任务的卡组或启动参数。
             matchups: matchups.map((matchup) => ({
                 ...matchup,
                 id: storedMatchupsByLabel.get(matchup.label).id,
