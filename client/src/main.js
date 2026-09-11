@@ -24,6 +24,11 @@ const componentThemeOverrides = {
 
 const darkThemeOverrides = {
     ...componentThemeOverrides,
+    Radio: {
+        buttonColorActive: '#63e6d3',
+        buttonTextColorActive: '#071015',
+        buttonBorderColorActive: '#63e6d3',
+    },
     common: {
         bodyColor: '#071015',
         cardColor: '#0d191f',
@@ -40,6 +45,11 @@ const darkThemeOverrides = {
 
 const lightThemeOverrides = {
     ...componentThemeOverrides,
+    Radio: {
+        buttonColorActive: '#137f73',
+        buttonTextColorActive: '#ffffff',
+        buttonBorderColorActive: '#137f73',
+    },
     common: {
         bodyColor: '#f2f7f7',
         cardColor: '#ffffff',

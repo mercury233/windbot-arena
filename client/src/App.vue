@@ -277,15 +277,14 @@ const stopMenuOptions = computed(() => {
     const run = activeRun.value;
     const options = [];
     if (stopCountdown.value) {
-        options.push({ label: '立即停止', key: 'immediate', disabled: stopping.value,
-            description: '立即停止任务并保存当前统计。现有对局可能继续运行，但后续结果不计入本次实验。' });
+        options.push({ label: '立即停止', key: 'immediate', disabled: stopping.value });
     }
     options.push({ label: '优雅停止', key: 'graceful', disabled: stopping.value || run?.status !== 'running',
         description: '停止创建新对局，等待所有对局全部结束后完成最终统计。' });
     if (['ranking', 'tag'].includes(run?.kind)) {
         options.push({ label: stopCountdown.value ? '修改定时停止' : '定时停止', key: 'timer',
             disabled: stopping.value || run?.status !== 'running',
-            description: '从设置成功时开始倒计时，到时优雅停止。' });
+            description: '倒计时结束后优雅停止测试。' });
     }
     return options;
 });
@@ -906,7 +905,7 @@ async function stopRun(graceful = false, runId = activeRun.value?.id) {
     stopping.value = true;
     try {
         await api(`/api/runs/${runId}/${graceful ? 'graceful-stop' : 'stop'}`, { method: 'POST' });
-        message.info(graceful ? '已请求优雅停止，等待所有对局结束后完成统计' : '正在立即停止测试');
+        message.info(graceful ? '已请求优雅停止，等待所有对局结束后完成统计' : '正在完成统计并停止测试');
         await refresh(['runs', 'active']);
     } catch (error) {
         message.error(error.message);
@@ -1607,10 +1606,10 @@ onBeforeUnmount(() => {
                                         width="trigger"
                                         style="width: max-content; min-width: 100%"
                                         :options="stopMenuOptions"
-                                        :render-option="({ node, option }) => h(NTooltip, { placement: 'left', style: { width: '320px', maxWidth: 'calc(100vw - 32px)', lineHeight: '1.6', fontWeight: '400' } }, {
+                                        :render-option="({ node, option }) => option.description ? h(NTooltip, { placement: 'left', style: { width: '320px', maxWidth: 'calc(100vw - 32px)', lineHeight: '1.6', fontWeight: '400' } }, {
                                             trigger: () => node,
                                             default: () => option.description,
-                                        })"
+                                        }) : node"
                                         @select="handleStopAction"
                                     >
                                     <n-button-group class="stop-button-group">
@@ -1624,14 +1623,9 @@ onBeforeUnmount(() => {
                                         </n-tooltip>
                                         <n-popconfirm v-else @positive-click="stopRun(false)">
                                             <template #trigger>
-                                                <n-tooltip placement="left" style="width: 320px; max-width: calc(100vw - 32px); line-height: 1.6; font-weight: 400">
-                                                    <template #trigger>
                                                 <n-button type="error" ghost :loading="stopping" :disabled="activeRun?.status === 'stopping'" @click.stop>停止测试</n-button>
-                                                    </template>
-                                                    立即停止任务并保存当前统计。现有对局可能继续运行，但后续结果不计入本次实验。
-                                                </n-tooltip>
                                             </template>
-                                            确认停止测试？
+                                            未完成的对局将不计入结果统计。确认停止测试？
                                         </n-popconfirm>
                                             <n-button class="stop-menu-trigger" type="error" ghost :disabled="stopping || activeRun?.status === 'stopping'" aria-label="停止选项">
                                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -2083,8 +2077,8 @@ onBeforeUnmount(() => {
             :show="!!stopConfirmationRunId"
             preset="dialog"
             title="立即停止"
-            content="确认立即停止测试？"
-            positive-text="停止测试"
+            content="未完成的对局将不计入结果统计。确认立即停止测试？"
+            positive-text="确认"
             negative-text="取消"
             @positive-click="stopRun(false, stopConfirmationRunId)"
             @update:show="!$event && (stopConfirmationRunId = '')"

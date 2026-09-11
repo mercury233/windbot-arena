@@ -169,7 +169,10 @@ function removeSrvpro(index) {
                         </n-form-item>
                         <template v-if="draft.notifications.mode === 'frontend'">
                             <n-form-item label="浏览器通知">
-                                <n-button :loading="testingNotification" @click="testNotification">测试通知</n-button>
+                                <div class="notification-test-row">
+                                    <n-button :loading="testingNotification" @click="testNotification">测试通知</n-button>
+                                    <n-alert v-if="notificationTestResult" type="info" :bordered="false">{{ notificationTestResult }}</n-alert>
+                                </div>
                             </n-form-item>
                             <p>首次使用请先测试一次通知以申请浏览器通知权限。页面需要保持打开才能接收通知。</p>
                         </template>
@@ -196,15 +199,17 @@ function removeSrvpro(index) {
                                     :placeholder="webhookHeadersExample" />
                             </n-form-item>
                             <p>以 JSON 格式填写 HTTP 请求头；留空不进行自定义。<span v-if="draft.notifications.webhookMethod === 'POST'">POST 的 Content-Type 固定为 application/json。</span></p>
-                            <n-button :loading="testingNotification" @click="testNotification">测试通知</n-button>
+                            <div class="notification-test-row">
+                                <n-button :loading="testingNotification" @click="testNotification">测试通知</n-button>
+                                <n-alert v-if="notificationTestResult" type="info" :bordered="false">{{ notificationTestResult }}</n-alert>
+                            </div>
                             <p>使用当前表单配置发送测试通知，无需先保存设置。</p>
                         </template>
-                        <n-alert v-if="notificationTestResult" type="info" :bordered="false">{{ notificationTestResult }}</n-alert>
                     </n-form>
                 </n-tab-pane>
                 <n-tab-pane name="srvpro" tab="SRVPro">
                     <n-alert type="info" :bordered="false">
-                        每个实例都应仅供 Arena 使用。任务会独占并重启所选实例；不同实例上的任务可以同时运行。
+                        SRVPro 需自行安装和运行。每个实例都应仅供 Arena 使用。任务会独占所选实例；不同实例上的任务可以同时运行。
                     </n-alert>
                     <div class="srvpro-settings">
                         <section
@@ -341,12 +346,16 @@ function removeSrvpro(index) {
             </n-tabs>
 
             <template #action>
-                <n-alert v-if="disabled" type="warning" :bordered="false">
-                    当前测试结束后才能保存系统配置。
-                </n-alert>
-                <div class="settings-actions">
-                    <n-button ref="cancelButton" @click="close">取消</n-button>
-                    <n-button type="primary" :disabled="disabled" :loading="saving" @click="save">保存配置</n-button>
+                <div class="settings-footer">
+                    <div v-if="disabled" class="settings-footer-alerts">
+                        <n-alert v-if="disabled" type="warning" :bordered="false">
+                            当前测试结束后才能保存系统配置。
+                        </n-alert>
+                    </div>
+                    <div class="settings-actions">
+                        <n-button ref="cancelButton" @click="close">取消</n-button>
+                        <n-button type="primary" :disabled="disabled" :loading="saving" @click="save">保存配置</n-button>
+                    </div>
                 </div>
             </template>
         </n-card>
@@ -448,13 +457,69 @@ function removeSrvpro(index) {
     font-size: 14px;
 }
 
+.notification-test-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+}
+
+.notification-test-row :deep(.n-button) {
+    flex-shrink: 0;
+}
+
+.settings-card .notification-test-row :deep(.n-alert) {
+    flex: 1;
+    min-width: 0;
+    margin-bottom: 0;
+}
+
+.notification-test-row :deep(.n-alert-body),
+.settings-footer-alerts :deep(.n-alert-body) {
+    padding-top: 6px;
+    padding-bottom: 6px;
+    line-height: 22px;
+}
+
+.notification-test-row :deep(.n-alert__icon),
+.settings-footer-alerts :deep(.n-alert__icon) {
+    top: 50%;
+    margin-top: 0;
+    transform: translateY(-50%);
+}
+
+.settings-footer {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.settings-footer-alerts {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings-card .settings-footer-alerts :deep(.n-alert) {
+    margin-bottom: 0;
+}
+
 .settings-actions {
     display: flex;
+    flex-shrink: 0;
+    margin-left: auto;
     gap: 10px;
     justify-content: flex-end;
 }
 
 @media (max-width: 640px) {
+    .settings-footer {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
     .instance-heading span {
         font-size: 12px;
     }
