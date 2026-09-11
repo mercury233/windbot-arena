@@ -110,6 +110,22 @@ function createApp(config, database, arenaService, shutdownSignal) {
         }
     });
 
+    app.post('/api/runs/:id/schedule-stop', (request, response, next) => {
+        try {
+            response.status(202).json({ run: arenaService.scheduleStopRun(request.params.id, request.body?.minutes) });
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    app.post('/api/runs/:id/graceful-stop', (request, response, next) => {
+        try {
+            response.status(202).json({ run: arenaService.gracefulStopRun(request.params.id) });
+        } catch (error) {
+            next(error);
+        }
+    });
+
     app.post('/api/runs/:id/stop', (request, response, next) => {
         try {
             response.status(202).json({ run: arenaService.stopRun(request.params.id) });

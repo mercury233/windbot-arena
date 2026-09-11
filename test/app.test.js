@@ -6,6 +6,43 @@ const path = require('node:path');
 const test = require('node:test');
 const { createApp } = require('../server/app');
 
+test('scheduled stop API forwards the run and duration', async (context) => {
+    const app = createApp({ rootDir: path.resolve(__dirname, '..') }, {}, {
+        scheduleStopRun(id, minutes) {
+            assert.equal(id, 'run-1');
+            assert.equal(minutes, 30);
+            return { id, config: { stopAt: '2026-09-11T12:00:00.000Z' } };
+        },
+    });
+    const server = createServer(app);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    context.after(() => new Promise((resolve) => server.close(resolve)));
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/runs/run-1/schedule-stop`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ minutes: 30 }),
+    });
+    assert.equal(response.status, 202);
+    assert.equal((await response.json()).run.config.stopAt, '2026-09-11T12:00:00.000Z');
+});
+
+test('graceful stop API dispatches to the service', async (context) => {
+    let stoppedId;
+    const app = createApp({ rootDir: path.resolve(__dirname, '..') }, {}, {
+        gracefulStopRun(id) {
+            stoppedId = id;
+            return { id, status: 'settling' };
+        },
+    });
+    const server = createServer(app);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    context.after(() => new Promise((resolve) => server.close(resolve)));
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/runs/run-1/graceful-stop`, {
+        method: 'POST',
+    });
+    assert.equal(response.status, 202);
+    assert.equal(stoppedId, 'run-1');
+    assert.deepEqual(await response.json(), { run: { id: 'run-1', status: 'settling' } });
+});
+
 test('development backend redirects page requests to the Vite server', async (context) => {
     const service = {};
     const app = createApp({

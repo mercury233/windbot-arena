@@ -1,5 +1,5 @@
 <script setup>
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
     NAlert,
     NAutoComplete,
@@ -20,6 +20,7 @@ import {
     NSpin,
     NSwitch,
     NTag,
+    NTooltip,
     useMessage,
 } from 'naive-ui';
 
@@ -59,6 +60,10 @@ const targetDeck = ref('');
 const challengerVersion = ref('current');
 const deckListExpanded = ref(true);
 const gamesPerMatchup = ref(500);
+const stopAfterMinutes = ref(60);
+const timerRunId = ref('');
+const timerSaving = ref(false);
+const stopConfirmationRunId = ref('');
 const challengeGamesPerMatchup = ref(100);
 const configuredGamesPerMatchup = computed({
     get: () => (
@@ -261,6 +266,29 @@ const launchPanelState = computed(() => {
 const terminalRunActionLabel = computed(() => (
     `任务${statusLabels[displayedRun.value?.status] || '已结束'}`
 ));
+const stopCountdown = computed(() => {
+    const run = activeRun.value;
+    if (run?.status !== 'running' || !run.config?.stopAt) return '';
+    const seconds = Math.max(0, Math.ceil((Date.parse(run.config.stopAt) - clockNow.value) / 1000));
+    return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+        .map((value) => String(value).padStart(2, '0')).join(':');
+});
+const stopMenuOptions = computed(() => {
+    const run = activeRun.value;
+    const options = [];
+    if (stopCountdown.value) {
+        options.push({ label: '立即停止', key: 'immediate', disabled: stopping.value,
+            description: '立即停止任务并保存当前统计。现有对局可能继续运行，但后续结果不计入本次实验。' });
+    }
+    options.push({ label: '优雅停止', key: 'graceful', disabled: stopping.value || run?.status !== 'running',
+        description: '停止创建新对局，等待所有对局全部结束后完成最终统计。' });
+    if (['ranking', 'tag'].includes(run?.kind)) {
+        options.push({ label: stopCountdown.value ? '修改定时停止' : '定时停止', key: 'timer',
+            disabled: stopping.value || run?.status !== 'running',
+            description: '从设置成功时开始倒计时，到时优雅停止。' });
+    }
+    return options;
+});
 const hasActiveRuns = computed(() => activeRuns.value.length > 0);
 const srvproOptions = computed(() => (system.value?.srvpros || []).map((srvpro) => {
     const busy = activeRuns.value.some((run) => run.srvproId === srvpro.id);
@@ -840,14 +868,46 @@ async function startRun() {
     }
 }
 
-async function stopRun() {
-    if (!activeRun.value) {
+function handleStopAction(key) {
+    if (!activeRun.value) return;
+    if (key === 'timer') {
+        timerRunId.value = activeRun.value.id;
+        stopAfterMinutes.value = activeRun.value.config?.stopAt
+            ? Math.max(1, Math.ceil((Date.parse(activeRun.value.config.stopAt) - Date.now()) / 60_000))
+            : 60;
+    } else if (key === 'immediate') {
+        stopConfirmationRunId.value = activeRun.value.id;
+    } else {
+        stopRun(true);
+    }
+}
+
+async function saveScheduledStop() {
+    timerSaving.value = true;
+    try {
+        await api(`/api/runs/${timerRunId.value}/schedule-stop`, {
+            method: 'POST', body: JSON.stringify({ minutes: stopAfterMinutes.value }),
+        });
+        timerRunId.value = '';
+        clockNow.value = Date.now();
+        await refresh(['runs', 'active']);
+        message.success('已设置定时停止');
+    } catch (error) {
+        message.error(error.message);
+    } finally {
+        timerSaving.value = false;
+    }
+    return false;
+}
+
+async function stopRun(graceful = false, runId = activeRun.value?.id) {
+    if (!runId) {
         return;
     }
     stopping.value = true;
     try {
-        await api(`/api/runs/${activeRun.value.id}/stop`, { method: 'POST' });
-        message.info('正在安全停止测试');
+        await api(`/api/runs/${runId}/${graceful ? 'graceful-stop' : 'stop'}`, { method: 'POST' });
+        message.info(graceful ? '已请求优雅停止，等待所有对局结束后完成统计' : '正在立即停止测试');
         await refresh(['runs', 'active']);
     } catch (error) {
         message.error(error.message);
@@ -1528,12 +1588,46 @@ onBeforeUnmount(() => {
                                     <n-button v-else-if="launchPanelState === 'terminal'" disabled>
                                         {{ terminalRunActionLabel }}
                                     </n-button>
-                                    <n-popconfirm v-else @positive-click="stopRun">
-                                        <template #trigger>
-                                            <n-button type="error" ghost :loading="stopping">停止测试</n-button>
-                                        </template>
-                                        已创建的对局不会撤销，现有记录会保留。确认停止？
-                                    </n-popconfirm>
+                                    <n-dropdown
+                                        v-else
+                                        trigger="click"
+                                        placement="bottom-start"
+                                        width="trigger"
+                                        style="width: max-content; min-width: 100%"
+                                        :options="stopMenuOptions"
+                                        :render-option="({ node, option }) => h(NTooltip, { placement: 'left', style: { width: '320px', maxWidth: 'calc(100vw - 32px)', lineHeight: '1.6', fontWeight: '400' } }, {
+                                            trigger: () => node,
+                                            default: () => option.description,
+                                        })"
+                                        @select="handleStopAction"
+                                    >
+                                    <n-button-group class="stop-button-group">
+                                        <n-tooltip v-if="stopCountdown" placement="left">
+                                            <template #trigger>
+                                                <n-button type="error" ghost @click.stop="handleStopAction('timer')" style="font-variant-numeric: tabular-nums">
+                                                    {{ stopCountdown }}
+                                                </n-button>
+                                            </template>
+                                            到时优雅停止，点击修改时间；下拉菜单可立即停止。
+                                        </n-tooltip>
+                                        <n-popconfirm v-else @positive-click="stopRun(false)">
+                                            <template #trigger>
+                                                <n-tooltip placement="left" style="width: 320px; max-width: calc(100vw - 32px); line-height: 1.6; font-weight: 400">
+                                                    <template #trigger>
+                                                <n-button type="error" ghost :loading="stopping" :disabled="activeRun?.status === 'stopping'" @click.stop>停止测试</n-button>
+                                                    </template>
+                                                    立即停止任务并保存当前统计。现有对局可能继续运行，但后续结果不计入本次实验。
+                                                </n-tooltip>
+                                            </template>
+                                            确认停止测试？
+                                        </n-popconfirm>
+                                            <n-button class="stop-menu-trigger" type="error" ghost :disabled="stopping || activeRun?.status === 'stopping'" aria-label="停止选项">
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                    <path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                                                </svg>
+                                            </n-button>
+                                    </n-button-group>
+                                    </n-dropdown>
                                 </div>
                             </div>
                         </article>
@@ -1564,20 +1658,30 @@ onBeforeUnmount(() => {
                                             · <code>{{ displayedRun.id.slice(0, 8).toUpperCase() }}</code>
                                             · {{ displayedRun.config?.srvproName || displayedRun.config?.duelServer || 'SRVPro' }}
                                             · 创建于 {{ formatDate(displayedRun.createdAt) }}
+                                            <template v-if="displayedRun.config?.stopAt">
+                                                · 定时停止于 {{ formatDate(displayedRun.config.stopAt) }}
+                                            </template>
                                         </p>
                                     </div>
                                 </div>
                                 <div class="results-actions">
-                                    <n-button-group size="small">
-                                        <n-button secondary @click="copyResults">复制文本</n-button>
-                                        <n-dropdown
+                                    <n-dropdown
                                             trigger="click"
+                                            placement="bottom-start"
+                                            width="trigger"
+                                            style="width: max-content; min-width: 100%"
                                             :options="resultDownloadOptions"
                                             @select="downloadResults"
                                         >
-                                            <n-button secondary aria-label="下载实验结果">▾</n-button>
-                                        </n-dropdown>
-                                    </n-button-group>
+                                        <n-button-group size="small">
+                                            <n-button secondary @click.stop="copyResults">复制文本</n-button>
+                                            <n-button secondary aria-label="下载实验结果">
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                    <path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                                                </svg>
+                                            </n-button>
+                                        </n-button-group>
+                                    </n-dropdown>
                                 </div>
                             </div>
 
@@ -1944,6 +2048,35 @@ onBeforeUnmount(() => {
             </div>
         </footer>
 
+        <n-modal
+            :show="!!timerRunId"
+            preset="dialog"
+            title="定时停止"
+            positive-text="开始倒计时"
+            negative-text="取消"
+            :positive-button-props="{ loading: timerSaving, disabled: timerSaving || !Number.isInteger(stopAfterMinutes) || stopAfterMinutes < 1 || stopAfterMinutes > 10080 }"
+            :mask-closable="!timerSaving"
+            :closable="!timerSaving"
+            :close-on-esc="!timerSaving"
+            :negative-button-props="{ disabled: timerSaving }"
+            @positive-click="saveScheduledStop"
+            @update:show="!$event && !timerSaving && (timerRunId = '')"
+        >
+            <p>从现在开始倒计时，到时停止创建新对局，等待所有对局结束后完成统计。</p>
+            <n-input-number v-model:value="stopAfterMinutes" :min="1" :max="10080" :precision="0" :disabled="timerSaving" aria-label="定时停止时长">
+                <template #suffix>分钟</template>
+            </n-input-number>
+        </n-modal>
+        <n-modal
+            :show="!!stopConfirmationRunId"
+            preset="dialog"
+            title="立即停止"
+            content="确认立即停止测试？"
+            positive-text="停止测试"
+            negative-text="取消"
+            @positive-click="stopRun(false, stopConfirmationRunId)"
+            @update:show="!$event && (stopConfirmationRunId = '')"
+        />
         <n-modal
             :show="!!editingNoteRun"
             preset="card"

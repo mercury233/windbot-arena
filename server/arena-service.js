@@ -645,17 +645,20 @@ class ArenaService {
             }
             await this.scheduleGames(context);
 
-            if (context.kind === 'ranking' || context.kind === 'tag') {
+            if (!context.gracefulStop && (context.kind === 'ranking' || context.kind === 'tag')) {
                 throw new Error('无限测试的调度意外结束');
             }
-            this.database.setRunStatus(context.id, 'settling');
-            this.database.addEvent(context.id, 'info', 'settling', '对局已全部创建，正在等待决斗完成');
-            this.markChanged('settling');
+            if (!context.gracefulStop) {
+                this.database.setRunStatus(context.id, 'settling');
+                this.database.addEvent(context.id, 'info', 'settling', '对局已全部创建，正在等待决斗完成');
+                this.markChanged('settling');
+            }
             const fullyObserved = await this.waitForResults(context);
             if (!fullyObserved) {
                 this.database.addEvent(context.id, 'warning', 'settle-timeout', '等待决斗完成超时，已保留现有结果');
             }
-            await this.finish(context, 'completed', '测试已完成');
+            await this.finish(context, context.gracefulStop ? 'stopped' : 'completed',
+                context.gracefulStop ? '所有对局已结束，测试已完成' : '测试已完成');
         } catch (error) {
             if (isAbortError(error) && context.stopReason) {
                 await this.finish(context, 'stopped', context.stopReason);
@@ -1151,6 +1154,9 @@ class ArenaService {
             || context.kind === 'tag'
             || launchedGames < context.totalGames
         ) {
+            if (context.gracefulStop) {
+                return;
+            }
             const pollStartedAt = Date.now();
             try {
                 const roomCount = await this.getRoomCount(context);
@@ -1165,6 +1171,9 @@ class ArenaService {
                 );
 
                 for (let index = 0; index < toLaunch; index++) {
+                    if (context.gracefulStop) {
+                        return;
+                    }
                     if (context.kind === 'ranking') {
                         const firstIndex = Math.floor(Math.random() * context.matchups.length);
                         let secondIndex = Math.floor(Math.random() * (context.matchups.length - 1));
@@ -1246,11 +1255,12 @@ class ArenaService {
     async waitForResults(context) {
         const deadline = Date.now() + SETTLE_TIMEOUT_MS;
         let finalScoreErrorRecorded = false;
-        while (Date.now() < deadline) {
+        let emptyPolls = 0;
+        while (context.gracefulStop || Date.now() < deadline) {
             const complete = context.matchups.every(
                 (matchup) => (context.latestObserved.get(matchup.id) || 0) >= context.gamesPerMatchup,
             );
-            if (complete) {
+            if (!context.gracefulStop && complete) {
                 return true;
             }
             let roomCount;
@@ -1262,9 +1272,17 @@ class ArenaService {
                     throw context.abortController.signal.reason;
                 }
             }
+            emptyPolls = roomCount === 0 ? emptyPolls + 1 : 0;
+            // WindBot 接受启动请求后可能尚未入房，优雅停止需再次确认房间仍为空。
+            if (context.gracefulStop && emptyPolls < 2) {
+                await sleep(SCHEDULE_POLL_MS, context.abortController.signal);
+                continue;
+            }
             if (roomCount === 0) {
                 try {
-                    await this.queryScores(context, context.abortController.signal);
+                    if (context.kind !== 'tag') {
+                        await this.queryScores(context, context.abortController.signal);
+                    }
                 } catch (error) {
                     if (context.abortController.signal.aborted) {
                         throw context.abortController.signal.reason;
@@ -1278,9 +1296,9 @@ class ArenaService {
                 }
                 const completeAfterFinalQuery = context.matchups.every(
                     (matchup) => (context.latestObserved.get(matchup.id) || 0)
-                        >= context.gamesPerMatchup,
+                        >= (context.gracefulStop ? matchup.launchedGames : context.gamesPerMatchup),
                 );
-                if (completeAfterFinalQuery) {
+                if (context.kind === 'tag' || completeAfterFinalQuery) {
                     return true;
                 }
                 this.database.addEvent(
@@ -1318,12 +1336,56 @@ class ArenaService {
             throw requestError('该测试当前不在运行', 409);
         }
         if (!context.stopReason) {
+            clearTimeout(context.stopTimer);
             context.stopReason = reason;
             context.queryScoresBeforeStop = reason === USER_STOP_REASON;
             this.database.setRunStatus(runId, 'stopping');
             this.database.addEvent(runId, 'warning', 'stopping', reason);
             context.abortController.abort(new DOMException(reason, 'AbortError'));
             this.markChanged('stopping');
+        }
+        return this.database.getRun(runId);
+    }
+
+    scheduleStopRun(runId, minutes) {
+        const context = [...this.contexts.values()].find((item) => item.id === runId);
+        if (!context || context.finished || !context.running || context.stopReason || context.gracefulStop) {
+            throw requestError('只能为正在调度的任务设置定时停止', 409);
+        }
+        if (context.kind !== 'ranking' && context.kind !== 'tag') {
+            throw requestError('定时停止仅适用于无限数量的模式');
+        }
+        if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080) {
+            throw requestError('定时停止时长必须是 1 到 10080 分钟之间的整数');
+        }
+        const stopAt = new Date(Date.now() + minutes * 60_000).toISOString();
+        this.database.setRunStopAt(runId, stopAt);
+        clearTimeout(context.stopTimer);
+        context.stopTimer = setTimeout(() => {
+            if (!context.finished && !context.stopReason && !context.gracefulStop) {
+                this.gracefulStopRun(runId, '定时停止已到期：不再创建新对局，等待所有对局结束后完成统计');
+            }
+        }, minutes * 60_000);
+        context.stopTimer.unref();
+        this.database.addEvent(runId, 'info', 'scheduled-stop', `已设置 ${minutes} 分钟后优雅停止`);
+        this.markChanged('scheduled-stop');
+        return this.database.getRun(runId);
+    }
+
+    gracefulStopRun(runId, reason = '已请求优雅停止：不再创建新对局，等待所有对局结束后完成统计') {
+        const context = [...this.contexts.values()].find((item) => item.id === runId);
+        if (!context || context.finished) {
+            throw requestError('该测试当前不在运行', 409);
+        }
+        if (!context.running) {
+            return this.stopRun(runId);
+        }
+        if (!context.gracefulStop && !context.stopReason) {
+            clearTimeout(context.stopTimer);
+            context.gracefulStop = true;
+            this.database.setRunStatus(runId, 'settling');
+            this.database.addEvent(runId, 'info', 'settling', reason);
+            this.markChanged('settling');
         }
         return this.database.getRun(runId);
     }
@@ -1359,6 +1421,7 @@ class ArenaService {
             return;
         }
         context.finished = true;
+        clearTimeout(context.stopTimer);
         context.running = false;
         if (!context.abortController.signal.aborted) {
             context.abortController.abort(new DOMException('任务已结束', 'AbortError'));
@@ -1376,7 +1439,7 @@ class ArenaService {
             finishedAt: new Date().toISOString(),
             stopReason: reason,
         });
-        if (status !== 'stopped') {
+        if (status !== 'stopped' || (context.gracefulStop && !context.stopReason)) {
             this.database.addEvent(
                 context.id,
                 status === 'failed' ? 'error' : 'info',

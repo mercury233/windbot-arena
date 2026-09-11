@@ -8,6 +8,34 @@ const test = require('node:test');
 const { ArenaDatabase } = require('../server/database');
 const { normalizeRank } = require('../server/stats');
 
+test('scheduled stop persists in run configuration without changing other fields', (context) => {
+    const database = new ArenaDatabase(':memory:');
+    context.after(() => database.close());
+    database.createRun({
+        id: 'scheduled', kind: 'ranking', gamesPerMatchup: 0,
+        createdAt: '2026-09-11T00:00:00.000Z', config: { selection: 'all' }, matchups: [], srvproId: 'srvpro-1',
+    });
+    database.setRunStopAt('scheduled', '2026-09-11T12:00:00.000Z');
+    database.setRunStopAt('scheduled', '2026-09-11T13:00:00.000Z');
+    const run = database.getRun('scheduled');
+    assert.equal(run.config.stopAt, '2026-09-11T13:00:00.000Z');
+    assert.equal(run.config.selection, 'all');
+    assert.equal(run.srvproId, 'srvpro-1');
+});
+
+test('settling runs remain active and are interrupted on restart', (context) => {
+    const database = new ArenaDatabase(':memory:');
+    context.after(() => database.close());
+    database.createRun({
+        id: 'settling-run', kind: 'ranking', gamesPerMatchup: 0,
+        createdAt: '2026-09-11T00:00:00.000Z', config: {}, matchups: [],
+        srvproId: 'srvpro-1',
+    });
+    database.setRunStatus('settling-run', 'settling');
+    assert.equal(database.markActiveRunsInterrupted(), 1);
+    assert.equal(database.getRun('settling-run').status, 'interrupted');
+});
+
 test('run notes migrate existing records and persist across restarts', (context) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'windbot-arena-note-'));
     const databasePath = path.join(tempDir, 'arena.sqlite');

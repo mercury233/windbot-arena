@@ -218,6 +218,11 @@ class ArenaDatabase {
         this.db.prepare(`UPDATE runs SET ${assignments.join(', ')} WHERE id = ?`).run(...values);
     }
 
+    setRunStopAt(runId, stopAt) {
+        this.db.prepare("UPDATE runs SET config_json = json_set(config_json, '$.stopAt', ?) WHERE id = ?")
+            .run(stopAt, runId);
+    }
+
     setRunNote(runId, note) {
         return this.db.prepare('UPDATE runs SET note = ? WHERE id = ?').run(note, runId).changes > 0;
     }

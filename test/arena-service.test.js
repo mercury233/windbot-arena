@@ -12,6 +12,112 @@ const {
 } = require('../server/arena-service');
 const { createDefaultArenaSettings } = require('../server/arena-settings');
 
+test('timed stop rejects finite modes and invalid durations before accessing settings', () => {
+    const service = new ArenaService({}, {});
+    for (const kind of ['regression', 'challenge']) {
+        service.contexts.set('srvpro-1', { id: 'run', kind, running: true });
+        assert.throws(() => service.scheduleStopRun('run', 1), /仅适用于无限数量/);
+    }
+    for (const kind of ['ranking', 'tag']) {
+        for (const stopAfterMinutes of [0, -1, 1.5, 10081, '60', true, NaN, Infinity]) {
+            service.contexts.set('srvpro-1', { id: 'run', kind, running: true });
+            assert.throws(() => service.scheduleStopRun('run', stopAfterMinutes), /1 到 10080 分钟/);
+        }
+    }
+});
+
+for (const kind of ['ranking', 'tag']) {
+    test(`${kind} timed stop starts after preparation and gracefully settles`, async (t) => {
+        let callback;
+        let delay;
+        let cleared = false;
+        const timer = { unref() {} };
+        t.mock.method(global, 'setTimeout', (handler, milliseconds) => {
+            callback = handler;
+            delay = milliseconds;
+            return timer;
+        });
+        t.mock.method(global, 'clearTimeout', (handle) => { if (handle === timer) cleared = true; });
+        const statuses = [];
+        const events = [];
+        const service = new ArenaService({}, {
+            getRun() {},
+            setRunStopAt(id, stopAt) {
+                assert.equal(id, `${kind}-run`);
+                assert.ok(Math.abs(Date.parse(stopAt) - Date.now() - 60 * 60_000) < 1000);
+            },
+            addEvent(...args) { events.push(args); },
+            setRunStatus(_, status) { statuses.push(status); },
+        });
+        const context = makeSchedulingContext(kind, ['A', 'B']);
+        context.srvproId = 'srvpro-1';
+        context.settings.windbots = { current: { mode: 'remote', host: 'localhost', port: 1 } };
+        service.contexts.set(context.srvproId, context);
+        service.rebootServer = async () => { assert.equal(callback, undefined); };
+        service.waitForWindBot = async () => { assert.equal(callback, undefined); };
+        service.pollScores = async () => {};
+        service.scheduleGames = async () => {
+            assert.equal(callback, undefined);
+            service.scheduleStopRun(context.id, 60);
+            assert.equal(delay, 60 * 60_000);
+            callback();
+            assert.equal(context.gracefulStop, true);
+            assert.equal(context.abortController.signal.aborted, false);
+            assert.equal(cleared, true);
+        };
+        service.waitForResults = async () => true;
+        await service.execute(context);
+        assert.deepEqual(statuses, ['running', 'settling', 'stopped']);
+        assert.ok(events.some((event) => /定时停止已到期/.test(event[3])));
+        callback();
+        assert.equal(statuses.length, 3);
+    });
+}
+
+test('rescheduling replaces the previous timer and stopped tasks reject scheduling', (t) => {
+    const handles = [];
+    const cleared = [];
+    const deadlines = [];
+    t.mock.method(global, 'setTimeout', () => {
+        const handle = { unref() {} };
+        handles.push(handle);
+        return handle;
+    });
+    t.mock.method(global, 'clearTimeout', (handle) => { cleared.push(handle); });
+    const service = new ArenaService({}, {
+        addEvent() {}, getRun() {},
+        setRunStopAt(_, deadline) { deadlines.push(deadline); },
+    });
+    const context = { id: 'run', running: true, kind: 'ranking' };
+    service.contexts.set('srvpro-1', context);
+    service.scheduleStopRun('run', 60);
+    service.scheduleStopRun('run', 30);
+    assert.equal(cleared[1], handles[0]);
+    assert.equal(context.stopTimer, handles[1]);
+    assert.ok(Date.parse(deadlines[1]) < Date.parse(deadlines[0]));
+    for (const state of [{ running: false }, { finished: true }, { gracefulStop: true }, { stopReason: 'stopped' }]) {
+        service.contexts.set('srvpro-1', { id: 'run', running: true, kind: 'ranking', ...state });
+        assert.throws(() => service.scheduleStopRun('run', 1), /只能为正在调度/);
+    }
+    assert.throws(() => service.scheduleStopRun('missing', 1), /只能为正在调度/);
+});
+
+test('manual stop and failure clear the scheduled stop timer', async (t) => {
+    const cleared = [];
+    t.mock.method(global, 'clearTimeout', (handle) => { cleared.push(handle); });
+    for (const action of ['immediate', 'graceful', 'failure', 'shutdown']) {
+        const service = new ArenaService({}, { addEvent() {}, setRunStatus() {}, getRun() {} });
+        const context = makeSchedulingContext('ranking', ['A', 'B']);
+        Object.assign(context, { running: true, stopTimer: action, srvproId: 'srvpro-1' });
+        service.contexts.set(context.srvproId, context);
+        if (action === 'immediate') service.stopRun(context.id);
+        if (action === 'graceful') service.gracefulStopRun(context.id);
+        if (action === 'failure') await service.finish(context, 'failed', 'test failure');
+        if (action === 'shutdown') await service.shutdown();
+    }
+    assert.deepEqual(cleared, ['immediate', 'graceful', 'failure', 'shutdown']);
+});
+
 function makeSchedulingContext(kind, labels) {
     return {
         abortController: new AbortController(),
@@ -31,6 +137,115 @@ function makeSchedulingContext(kind, labels) {
         totalGames: 0,
     };
 }
+
+for (const kind of ['regression', 'challenge', 'ranking', 'tag']) {
+    test(`${kind} graceful stop finishes the in-flight group without scheduling another`, async () => {
+        let launches = 0;
+        const statuses = [];
+        const service = new ArenaService({}, {
+            addEvent() {}, getRun() {}, setRoomCount() {},
+            setRunStatus(_, status) { statuses.push(status); },
+            recordLaunch() { launches++; },
+        });
+        const context = makeSchedulingContext(kind, ['A', 'B']);
+        Object.assign(context, { running: true, srvproId: 'srvpro-1', gamesPerMatchup: 10, totalGames: 20 });
+        service.contexts.set(context.srvproId, context);
+        service.getRoomCount = async () => 0;
+        const launch = async () => {
+            service.gracefulStopRun(context.id);
+            service.gracefulStopRun(context.id);
+            assert.equal(context.abortController.signal.aborted, false);
+        };
+        service.launchMatchup = launch;
+        service.launchRankingPair = launch;
+        service.launchTagGroup = launch;
+        await service.scheduleGames(context);
+        assert.equal(launches, 1);
+        assert.deepEqual(statuses, ['settling']);
+        service.stopRun(context.id);
+        assert.equal(context.abortController.signal.aborted, true);
+    });
+}
+
+for (const kind of ['regression', 'ranking', 'tag']) {
+    test(`${kind} graceful stop waits for empty rooms and saves final scores`, async () => {
+        const service = new ArenaService({}, { addEvent() {}, setRoomCount() {} });
+        const context = makeSchedulingContext(kind, ['A', 'B']);
+        context.gracefulStop = true;
+        context.latestObserved = new Map([[1, 100], [2, 100]]);
+        let polls = 0;
+        let queries = 0;
+        service.getRoomCount = async () => (++polls === 1 ? 1 : 0);
+        service.queryScores = async () => { queries++; };
+        assert.equal(await service.waitForResults(context), true);
+        assert.equal(polls, 3);
+        assert.equal(queries, kind === 'tag' ? 0 : 1);
+    });
+}
+
+test('graceful stop during preparation aborts before any games are scheduled', () => {
+    const service = new ArenaService({}, { addEvent() {}, setRunStatus() {}, getRun() {} });
+    const context = makeSchedulingContext('regression', ['A']);
+    service.contexts.set('srvpro-1', context);
+    service.gracefulStopRun(context.id);
+    assert.equal(context.abortController.signal.aborted, true);
+});
+
+test('shutdown interrupts a graceful drain', async () => {
+    const service = new ArenaService({}, { addEvent() {}, setRunStatus() {}, getRun() {} });
+    const context = makeSchedulingContext('ranking', ['A', 'B']);
+    context.running = true;
+    service.contexts.set('srvpro-1', context);
+    service.gracefulStopRun(context.id);
+    await service.shutdown();
+    assert.equal(context.abortController.signal.aborted, true);
+    assert.equal(context.queryScoresBeforeStop, false);
+});
+
+test('unlimited run retains its context and local bots until graceful settlement finishes', async () => {
+    const statuses = [];
+    const service = new ArenaService({}, {
+        addEvent() {}, getRun() {},
+        setRunStatus(_, status) { statuses.push(status); },
+    });
+    const context = makeSchedulingContext('ranking', ['A', 'B']);
+    context.settings.windbots = { current: { mode: 'remote', host: 'localhost', port: 1 } };
+    context.srvproId = 'srvpro-1';
+    service.contexts.set(context.srvproId, context);
+    service.rebootServer = async () => {};
+    service.waitForWindBot = async () => {};
+    let cleaned = false;
+    service.stopLocalWindBots = () => { cleaned = true; };
+    service.pollScores = async () => {};
+    service.scheduleGames = async () => { service.gracefulStopRun(context.id); };
+    service.waitForResults = async () => {
+        assert.equal(service.contexts.get(context.srvproId), context);
+        assert.equal(cleaned, false);
+        assert.equal(context.abortController.signal.aborted, false);
+        return true;
+    };
+    await service.execute(context);
+    assert.deepEqual(statuses, ['running', 'settling', 'stopped']);
+    assert.equal(cleaned, true);
+    assert.equal(service.contexts.size, 0);
+});
+
+test('graceful drain retries final score failures and remains immediately stoppable', async () => {
+    const service = new ArenaService({}, { addEvent() {}, setRoomCount() {}, setRunStatus() {}, getRun() {} });
+    const context = makeSchedulingContext('ranking', ['A', 'B']);
+    Object.assign(context, { running: true, latestObserved: new Map() });
+    service.contexts.set('srvpro-1', context);
+    service.gracefulStopRun(context.id);
+    service.getRoomCount = async () => 0;
+    let queries = 0;
+    service.queryScores = async () => {
+        queries++;
+        if (queries === 2) service.stopRun(context.id);
+        throw new Error('scores unavailable');
+    };
+    await assert.rejects(service.waitForResults(context), { name: 'AbortError' });
+    assert.equal(queries, 2);
+});
 
 test('ranking scheduler draws two distinct random entries and records one pair launch', async () => {
     const launches = [];
