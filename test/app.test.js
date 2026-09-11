@@ -29,6 +29,7 @@ test('settings, room, WindBot and run APIs return service data', async (context)
     let refreshedDecks = false;
     let requestedRunPage;
     let deletedRunId;
+    let noteUpdate;
     let halfwayWatchUpdate;
     const publicRecord = {
         secretStatus: { srvpros: { 'srvpro-1': { passwordConfigured: true } } },
@@ -53,6 +54,10 @@ test('settings, room, WindBot and run APIs return service data', async (context)
         },
         deleteRun: (runId) => {
             deletedRunId = runId;
+        },
+        updateRunNote: (id, note) => {
+            noteUpdate = { id, note };
+            return noteUpdate;
         },
     };
     const database = {
@@ -111,6 +116,14 @@ test('settings, room, WindBot and run APIs return service data', async (context)
     const deleteResponse = await fetch(`${baseUrl}/api/runs/run-21`, { method: 'DELETE' });
     assert.equal(deleteResponse.status, 204);
     assert.equal(deletedRunId, 'run-21');
+    const noteResponse = await fetch(`${baseUrl}/api/runs/run-21/note`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: '手动备注' }),
+    });
+    assert.equal(noteResponse.status, 200);
+    assert.deepEqual(await noteResponse.json(), { run: { id: 'run-21', note: '手动备注' } });
+    assert.deepEqual(noteUpdate, { id: 'run-21', note: '手动备注' });
 
 });
 

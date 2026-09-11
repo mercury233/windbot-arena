@@ -627,6 +627,29 @@ test('state revisions separate static, history and active-run changes', () => {
     assert.deepEqual(service.getRevisions(), { active: 6, runs: 1, system: 1 });
 });
 
+test('run notes validate input and notify history and active views', () => {
+    const records = new Map([
+        ['finished', { id: 'finished', status: 'completed' }],
+        ['active', { id: 'active', status: 'running' }],
+    ]);
+    const service = new ArenaService({}, {
+        setRunNote(id, note) {
+            if (!records.has(id)) return false;
+            records.get(id).note = note;
+            return true;
+        },
+        getRun: (id) => records.get(id),
+    });
+    assert.equal(service.updateRunNote('finished', ' 中文备注 ').note, '中文备注');
+    assert.equal(service.updateRunNote('active', '测试').status, 'running');
+    assert.equal(service.updateRunNote('finished', '  ').note, '');
+    for (const value of [undefined, null, 1, {}, 'a'.repeat(201)]) {
+        assert.throws(() => service.updateRunNote('finished', value), { statusCode: 400 });
+    }
+    assert.throws(() => service.updateRunNote('missing', '备注'), { statusCode: 404 });
+    assert.deepEqual(service.getRevisions(), { active: 3, runs: 3, system: 0 });
+});
+
 test('run deletion only accepts terminal history and updates its revision', () => {
     const records = new Map([
         ['finished-run', { id: 'finished-run', status: 'completed' }],

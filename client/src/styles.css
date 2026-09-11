@@ -929,6 +929,32 @@ input {
     box-shadow: inset 2px 0 #63e6d3;
 }
 
+.run-note-edit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 3px;
+    border: 0;
+    border-radius: 4px;
+    color: inherit;
+    background: transparent;
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+.run-note-edit svg {
+    width: 14px;
+    height: 14px;
+}
+
+.run-note-edit:hover,
+.run-note-edit:focus-visible {
+    color: #18a999;
+    background: rgba(24, 169, 153, 0.12);
+}
+
 .history-delete {
     position: absolute;
     top: 5px;

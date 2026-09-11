@@ -9,6 +9,7 @@ import {
     NCheckbox,
     NDropdown,
     NEmpty,
+    NInput,
     NInputNumber,
     NModal,
     NPopconfirm,
@@ -44,6 +45,9 @@ const runs = ref([]);
 const historyPage = ref(1);
 const historyTotal = ref(0);
 const deletingRunId = ref('');
+const editingNoteRun = ref(null);
+const noteDraft = ref('');
+const savingNote = ref(false);
 const activeRuns = ref([]);
 const selectedRun = ref(null);
 const selectedSrvproId = ref('');
@@ -491,6 +495,10 @@ async function refresh(domains = allRefreshDomains) {
             if (responses.runs) {
                 runs.value = responses.runs.runs;
                 historyTotal.value = responses.runs.total;
+                const selectedHistory = runs.value.find((run) => run.id === selectedRun.value?.id);
+                if (selectedHistory) {
+                    selectedRun.value.note = selectedHistory.note;
+                }
             }
             if (responses.active) {
                 const previousActiveIds = new Set(activeRuns.value.map((run) => run.id));
@@ -506,6 +514,19 @@ async function refresh(domains = allRefreshDomains) {
                 } else if (!selectedRun.value && nextActiveRuns.length > 0) {
                     selectedRun.value = nextActiveRuns[0];
                     await applyRunConfiguration(nextActiveRuns[0]);
+                }
+            }
+            if (
+                responses.runs
+                && selectedRun.value
+                && terminalStatuses.has(selectedRun.value.status)
+                && !runs.value.some((run) => run.id === selectedRun.value.id)
+            ) {
+                const selectedRunId = selectedRun.value.id;
+                const selectionRequest = runSelectionRequest;
+                const { run } = await api(`/api/runs/${selectedRunId}`);
+                if (selectionRequest === runSelectionRequest && selectedRun.value?.id === selectedRunId) {
+                    selectedRun.value.note = run.note;
                 }
             }
             if (!selectedRun.value && runs.value.length > 0) {
@@ -573,6 +594,25 @@ function selectSrvpro(srvproId) {
 function selectHistoryPage(page) {
     historyPage.value = page;
     refresh(['runs']).catch((error) => message.error(error.message));
+}
+
+async function saveRunNote() {
+    if (savingNote.value) return;
+    savingNote.value = true;
+    try {
+        const { run } = await api(`/api/runs/${editingNoteRun.value.id}/note`, {
+            method: 'PUT',
+            body: JSON.stringify({ note: noteDraft.value }),
+        });
+        if (selectedRun.value?.id === run.id) selectedRun.value.note = run.note;
+        editingNoteRun.value = null;
+        await refresh(['runs', 'active']);
+        message.success('备注已保存');
+    } catch (error) {
+        message.error(error.message);
+    } finally {
+        savingNote.value = false;
+    }
 }
 
 async function deleteRun(runId) {
@@ -869,16 +909,20 @@ function getRunElapsedMilliseconds(run) {
 
 function formatHistoryTitle(run) {
     const label = runKindLabels[run.kind] || run.kind;
+    return `${label} · ${run.note || formatHistoryNote(run)}`;
+}
+
+function formatHistoryNote(run) {
     const matchupCount = run.matchupCount ?? run.matchups?.length ?? 0;
     if (run.kind === 'challenge') {
         const version = run.config?.challengerVersion === 'old' ? '旧版' : '新版';
-        return `${label} · ${version} ${run.config?.targetDeck || '—'} VS ${matchupCount} 个卡组`;
+        return `${version} ${run.config?.targetDeck || '—'} VS ${matchupCount} 个卡组`;
     }
     const deckName = run.deckName || run.matchups?.[0]?.label;
     if (run.kind === 'regression' && matchupCount === 1 && deckName) {
-        return `${label} · ${deckName} · 1 个卡组`;
+        return `${deckName} · 1 个卡组`;
     }
-    return `${label} · ${matchupCount} 个卡组`;
+    return `${matchupCount} 个卡组`;
 }
 
 async function writeClipboard(text) {
@@ -1090,7 +1134,8 @@ function downloadResults(format) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `windbot-arena-${run.kind}-${run.id.slice(0, 8)}.${fileType.extension}`;
+    const note = (run.note || '').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim();
+    link.download = `windbot-arena-${run.kind}-${note ? `${note}-` : ''}${run.id.slice(0, 8)}.${fileType.extension}`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -1505,6 +1550,17 @@ onBeforeUnmount(() => {
                                         </div>
                                         <p class="results-meta">
                                             {{ formatHistoryTitle(displayedRun) }}
+                                            <button
+                                                class="run-note-edit"
+                                                type="button"
+                                                title="修改备注"
+                                                aria-label="修改实验备注"
+                                                @click="editingNoteRun = displayedRun; noteDraft = displayedRun.note || formatHistoryNote(displayedRun)"
+                                            >
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                                    <path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z" />
+                                                </svg>
+                                            </button>
                                             · <code>{{ displayedRun.id.slice(0, 8).toUpperCase() }}</code>
                                             · {{ displayedRun.config?.srvproName || displayedRun.config?.duelServer || 'SRVPro' }}
                                             · 创建于 {{ formatDate(displayedRun.createdAt) }}
@@ -1887,6 +1943,30 @@ onBeforeUnmount(() => {
                 </div>
             </div>
         </footer>
+
+        <n-modal
+            :show="!!editingNoteRun"
+            preset="card"
+            title="修改实验备注"
+            style="width: min(480px, calc(100vw - 32px))"
+            :mask-closable="!savingNote"
+            :closable="!savingNote"
+            :close-on-esc="!savingNote"
+            @update:show="!$event && (editingNoteRun = null)"
+        >
+            <form style="display: flex; flex-direction: column; align-items: flex-start; gap: 16px" @submit.prevent="saveRunNote">
+                <n-input
+                    v-model:value="noteDraft"
+                    aria-label="实验备注"
+                    placeholder="留空恢复自动描述"
+                    :maxlength="200"
+                    :disabled="savingNote"
+                    clearable
+                    show-count
+                />
+                <n-button type="primary" attr-type="submit" :loading="savingNote">保存</n-button>
+            </form>
+        </n-modal>
 
         <settings-modal
             v-model:show="settingsOpen"

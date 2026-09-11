@@ -118,6 +118,14 @@ function createApp(config, database, arenaService, shutdownSignal) {
         }
     });
 
+    app.put('/api/runs/:id/note', (request, response, next) => {
+        try {
+            response.json({ run: arenaService.updateRunNote(request.params.id, request.body?.note) });
+        } catch (error) {
+            next(error);
+        }
+    });
+
     app.delete('/api/runs/:id', (request, response, next) => {
         try {
             arenaService.deleteRun(request.params.id);

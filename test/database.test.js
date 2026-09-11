@@ -8,6 +8,35 @@ const test = require('node:test');
 const { ArenaDatabase } = require('../server/database');
 const { normalizeRank } = require('../server/stats');
 
+test('run notes migrate existing records and persist across restarts', (context) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'windbot-arena-note-'));
+    const databasePath = path.join(tempDir, 'arena.sqlite');
+    let database = new ArenaDatabase(databasePath);
+    context.after(() => {
+        if (database.db.open) database.close();
+        fs.rmSync(tempDir, { force: true, recursive: true });
+    });
+    database.createRun({
+        id: 'legacy', kind: 'regression', gamesPerMatchup: 10,
+        createdAt: '2026-08-08T00:00:00.000Z', config: {}, matchups: [],
+        srvproId: 'srvpro-1',
+    });
+    database.db.exec('ALTER TABLE runs DROP COLUMN note');
+    database.db.prepare('DELETE FROM schema_migrations WHERE version = ?').run('003_run_note.sql');
+    database.close();
+    database = new ArenaDatabase(databasePath);
+    assert.equal(database.getRun('legacy').note, '');
+    assert.equal(database.getRun('legacy').gamesPerMatchup, 10);
+    assert.equal(database.setRunNote('legacy', '新版测试 <备注>'), true);
+    assert.equal(database.setRunNote('missing', '备注'), false);
+    database.close();
+    database = new ArenaDatabase(databasePath);
+    assert.equal(database.getRun('legacy').note, '新版测试 <备注>');
+    assert.equal(database.listRuns()[0].note, '新版测试 <备注>');
+    database.setRunNote('legacy', '');
+    assert.equal(database.getRun('legacy').note, '');
+});
+
 test('ArenaDatabase migrates the single SRVPro setting without losing its secret', (context) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'windbot-arena-settings-migration-'));
     const databasePath = path.join(tempDir, 'arena.sqlite');

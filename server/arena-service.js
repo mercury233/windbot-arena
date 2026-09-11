@@ -1328,6 +1328,17 @@ class ArenaService {
         return this.database.getRun(runId);
     }
 
+    updateRunNote(runId, note) {
+        if (typeof note !== 'string' || note.length > 200) {
+            throw requestError('备注必须是最多 200 个字符的文本', 400);
+        }
+        if (!this.database.setRunNote(runId, note.trim())) {
+            throw requestError('运行记录不存在', 404);
+        }
+        this.markChanged('note');
+        return this.database.getRun(runId);
+    }
+
     deleteRun(runId) {
         const run = this.database.getRun(runId);
         if (!run) {

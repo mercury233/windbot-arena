@@ -41,6 +41,7 @@ function mapRunRow(row) {
         gamesPerMatchup: row.games_per_matchup,
         id: row.id,
         kind: row.kind,
+        note: row.note,
         latestRankAt: row.latest_rank_at,
         launchedGames: row.launched_games,
         roomCount: row.room_count,
@@ -215,6 +216,10 @@ class ArenaDatabase {
         }
         values.push(runId);
         this.db.prepare(`UPDATE runs SET ${assignments.join(', ')} WHERE id = ?`).run(...values);
+    }
+
+    setRunNote(runId, note) {
+        return this.db.prepare('UPDATE runs SET note = ? WHERE id = ?').run(note, runId).changes > 0;
     }
 
     setRoomCount(runId, roomCount) {
