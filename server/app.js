@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
+const { validateAndMergeArenaSettings } = require('./arena-settings');
 
 const STATE_HEARTBEAT_MS = 5000;
 
@@ -55,6 +56,30 @@ function createApp(config, database, arenaService, shutdownSignal) {
             response.json(await arenaService.updateSettings(request.body));
         } catch (error) {
             next(error);
+        }
+    });
+
+    app.post('/api/notifications/test', async (request, response) => {
+        const { settings: existing } = database.getArenaSettings();
+        let settings;
+        try {
+            if (request.body?.mode !== 'webhook') throw new Error('请选择 Webhook 模式');
+            settings = validateAndMergeArenaSettings({ ...existing, notifications: request.body }, existing).notifications;
+        } catch (error) {
+            response.status(400).json({ error: error.message });
+            return;
+        }
+        const srvproId = existing.srvpros[0].id;
+        try {
+            await arenaService.notifications.deliver({
+                title: 'WindBot Arena · 测试通知',
+                body: `这是一条测试通知（${srvproId}）`,
+                runId: 'notification-test', status: 'completed',
+                finishedAt: new Date().toISOString(), srvproId, note: '这是一条测试通知',
+            }, settings);
+            response.json({ message: '测试通知请求已成功发送，请在接收端确认。' });
+        } catch {
+            response.status(502).json({ error: '测试通知发送失败，请检查 URL、模板、HTTP 请求头和网络。' });
         }
     });
 
@@ -173,6 +198,8 @@ function createApp(config, database, arenaService, shutdownSignal) {
         }
 
         const heartbeat = setInterval(() => writeState('heartbeat'), STATE_HEARTBEAT_MS);
+        const notify = (payload) => response.write(`event: notification\ndata: ${JSON.stringify(payload)}\n\n`);
+        arenaService.notifications?.on('notification', notify);
         let closed = false;
         const cleanup = () => {
             if (closed) {
@@ -180,6 +207,7 @@ function createApp(config, database, arenaService, shutdownSignal) {
             }
             closed = true;
             clearInterval(heartbeat);
+            arenaService.notifications?.off('notification', notify);
             shutdownSignal?.removeEventListener('abort', closeForShutdown);
         };
         const closeForShutdown = () => {

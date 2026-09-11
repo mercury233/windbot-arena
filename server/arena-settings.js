@@ -1,7 +1,10 @@
 'use strict';
 
+const { DEFAULT_WEBHOOK_TEMPLATE, renderWebhookTemplate, renderWebhookUrl } = require('./notifications');
+
 function createDefaultArenaSettings() {
     return {
+        notifications: { mode: 'off', webhookMethod: 'POST', webhookUrl: '', webhookTemplate: DEFAULT_WEBHOOK_TEMPLATE, webhookHeaders: '' },
         srvpros: [{
             duelPort: 7911,
             host: '',
@@ -134,7 +137,62 @@ function validateAndMergeArenaSettings(input, existing) {
         };
     });
 
+    const notifications = {
+        ...(previous.notifications || createDefaultArenaSettings().notifications),
+        ...input.notifications,
+    };
+    if (!['off', 'frontend', 'webhook'].includes(notifications.mode)) {
+        throw new Error('通知模式无效');
+    }
+    notifications.webhookMethod ??= 'POST';
+    if (!['GET', 'POST'].includes(notifications.webhookMethod)) throw new Error('Webhook 请求方式必须是 GET 或 POST');
+    notifications.webhookUrl = String(notifications.webhookUrl ?? '').trim();
+    notifications.webhookTemplate = String(notifications.webhookTemplate ?? '');
+    notifications.webhookHeaders = String(notifications.webhookHeaders ?? '').trim();
+    if (notifications.webhookUrl) {
+        let url;
+        try {
+            url = new URL(renderWebhookUrl(notifications.webhookUrl, {}));
+        } catch { throw new Error('Webhook URL 或模板变量无效'); }
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || notifications.webhookUrl.length > 2000) {
+            throw new Error('Webhook 必须是无内嵌账号密码的 HTTP(S) URL，且不超过 2000 个字符');
+        }
+    }
+    if (notifications.mode === 'webhook' && !notifications.webhookUrl) {
+        throw new Error('请填写 Webhook URL');
+    }
+    if (notifications.webhookTemplate.length > 20000 || notifications.webhookHeaders.length > 10000) {
+        throw new Error('Webhook JSON 模板或请求头过长');
+    }
+    if (notifications.mode === 'webhook' && notifications.webhookMethod === 'POST' && !notifications.webhookTemplate.trim()) {
+        throw new Error('POST 请求体模板不能为空');
+    }
+    if (notifications.webhookTemplate.trim()) {
+        try {
+            const body = renderWebhookTemplate(notifications.webhookTemplate, {});
+            if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error();
+        } catch {
+            throw new Error('Webhook 模板必须是 JSON 对象，且只使用支持的变量');
+        }
+    }
+    try {
+        const headers = JSON.parse(notifications.webhookHeaders || '{}');
+        if (!headers || typeof headers !== 'object' || Array.isArray(headers)) throw new Error();
+        for (const [key, value] of Object.entries(headers)) {
+            if (typeof value !== 'string' || /^(host|content-length|content-type|connection|transfer-encoding)$/i.test(key)) throw new Error();
+            new Headers({ [key]: value });
+        }
+    } catch {
+        throw new Error('Webhook 请求头必须是字符串值的 JSON 对象，不能覆盖 Host、Content-Type 或传输控制头');
+    }
     const settings = {
+        notifications: {
+            mode: notifications.mode,
+            webhookMethod: notifications.webhookMethod,
+            webhookUrl: notifications.webhookUrl,
+            webhookTemplate: notifications.webhookTemplate,
+            webhookHeaders: notifications.webhookHeaders,
+        },
         srvpros,
         windbots: {
             current: readWindBot(input.windbots?.current, previous.windbots.current, '新版 WindBot '),
@@ -163,6 +221,7 @@ function getPublicArenaSettings(settings, updatedAt) {
     const result = structuredClone(settings);
     const defaultRoomsPerSecond = createDefaultArenaSettings().srvpros[0].roomsPerSecond;
     const secretStatus = { srvpros: {} };
+    result.notifications = { ...createDefaultArenaSettings().notifications, ...result.notifications };
     for (const srvpro of result.srvpros) {
         const source = settings.srvpros.find((item) => item.id === srvpro.id);
         secretStatus.srvpros[srvpro.id] = {

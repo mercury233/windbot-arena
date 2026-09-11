@@ -548,13 +548,12 @@ async function refresh(domains = allRefreshDomains) {
                 responses.runs
                 && selectedRun.value
                 && terminalStatuses.has(selectedRun.value.status)
-                && !runs.value.some((run) => run.id === selectedRun.value.id)
             ) {
                 const selectedRunId = selectedRun.value.id;
                 const selectionRequest = runSelectionRequest;
                 const { run } = await api(`/api/runs/${selectedRunId}`);
                 if (selectionRequest === runSelectionRequest && selectedRun.value?.id === selectedRunId) {
-                    selectedRun.value.note = run.note;
+                    selectedRun.value = run;
                 }
             }
             if (!selectedRun.value && runs.value.length > 0) {
@@ -1276,6 +1275,20 @@ onMounted(async () => {
     eventSource = new EventSource('/api/events');
     eventSource.addEventListener('ready', handleRevisionEvent);
     eventSource.addEventListener('heartbeat', handleRevisionEvent);
+    eventSource.addEventListener('notification', (event) => {
+        const notification = JSON.parse(event.data);
+        if ('Notification' in window && Notification.permission === 'granted') {
+            try {
+                new Notification(notification.title, {
+                    body: notification.body,
+                    tag: `arena-${notification.runId}`,
+                    icon: '/arena.ico',
+                });
+            } catch {
+                // 部分移动浏览器不支持 Notification 构造器，跳过通知以免影响状态刷新。
+            }
+        }
+    });
     eventSource.onerror = () => {
         liveConnected.value = false;
     };

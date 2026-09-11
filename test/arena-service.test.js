@@ -892,6 +892,8 @@ test('startup events update the active-run revision while WindBot is still start
             eventTypes.push(eventType);
         },
         setRunStatus() {},
+        getRun: (id) => ({ id }),
+        getArenaSettings: () => ({ settings: createDefaultArenaSettings() }),
     };
     const service = new ArenaService({}, database);
     const context = {
@@ -1601,6 +1603,8 @@ test('shared local WindBot stays alive until the last concurrent run finishes', 
     const service = new ArenaService({}, {
         addEvent() {},
         setRunStatus() {},
+        getRun: (id) => ({ id }),
+        getArenaSettings: () => ({ settings: createDefaultArenaSettings() }),
     });
     let killCount = 0;
     service.localWindbots.set('current', {
@@ -1763,6 +1767,7 @@ test('manual stop queries scores once more after the regular poller exits', asyn
             events.push(args);
         },
         getRun: () => ({ id: 'manual-stop-run' }),
+        getArenaSettings: () => ({ settings: createDefaultArenaSettings() }),
         setRunStatus(runId, status) {
             statuses.push([runId, status]);
         },

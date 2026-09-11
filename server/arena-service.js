@@ -1,5 +1,7 @@
 'use strict';
 
+const { Notifications } = require('./notifications');
+
 const childProcess = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
@@ -156,6 +158,8 @@ class ArenaService {
     constructor(runtimeConfig, database) {
         this.runtimeConfig = runtimeConfig;
         this.database = database;
+        this.notifications = new Notifications(database);
+        this.pendingNotifications = new Set();
         this.contexts = new Map();
         this.localWindbots = new Map();
         this.revisions = {
@@ -1449,6 +1453,25 @@ class ArenaService {
             this.stopLocalWindBots();
         }
         this.markChanged(status);
+        if (!(status === 'stopped' && context.stopReason === USER_STOP_REASON)) {
+            const notification = (async () => {
+                try {
+                    await this.notifications.send(this.database.getRun(context.id));
+                } catch {
+                    // 通知等待期间，已结束的任务可能被用户删除。
+                    if (!this.database.getRun(context.id)) return;
+                    // Delivery errors can contain secret endpoint URLs; keep task logs generic.
+                    this.database.addEvent(context.id, 'warning', 'notification-error', '任务已结束，但通知发送失败，请检查通知配置和网络');
+                    this.markChanged('notification-error');
+                }
+            })();
+            this.pendingNotifications.add(notification);
+            try {
+                await notification;
+            } finally {
+                this.pendingNotifications.delete(notification);
+            }
+        }
     }
 
     markChanged(reason) {
@@ -1472,12 +1495,12 @@ class ArenaService {
         const contexts = [...this.contexts.values()];
         if (contexts.length === 0) {
             this.stopLocalWindBots();
-            return;
         }
         for (const context of contexts) {
             this.stopRun(context.id, 'Arena 服务正在关闭');
         }
         await Promise.all(contexts.map((context) => context.done));
+        await Promise.all(this.pendingNotifications);
     }
 }
 
